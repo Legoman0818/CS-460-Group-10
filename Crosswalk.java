@@ -1,7 +1,13 @@
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import javafx.application.Application;
+import javafx.animation.AnimationTimer;
+import javafx.application.Platform;
 import javafx.scene.Cursor;
 import javafx.scene.Group;
 import javafx.scene.Node;
@@ -28,6 +34,16 @@ import javafx.stage.Stage;
  */
 public class Crosswalk extends Application {
 
+    /*
+     * PRESENTATION GUIDE
+     * ------------------
+     * start()              builds the JavaFX window and calls each drawing method.
+     * signals()            creates the clickable traffic lights.
+     * trafficSimulation()  creates the three cars and runs their animation.
+     * Signal               stores a light's current GREEN/YELLOW/RED state.
+     * Car.java             contains the actual stopping and turning logic.
+     */
+
     // pane
     private static final double W = 1024;
     private static final double H = 945;
@@ -46,12 +62,28 @@ public class Crosswalk extends Application {
     // clickable state
     private final List<Signal> signals = new ArrayList<>();
     private final List<PedZone> pedZones = new ArrayList<>();
+    private final Map<String, Signal> signalByName = new HashMap<>();
+    private final Map<String, PedZone> pedestrianByName = new HashMap<>();
     private boolean pedAlarm = false;   // toggled by clicking any pedestrian marker
+    private DigitalTwinServer socketServer;
+    private Signal eastLeftSignal;
+    private Signal eastStraightSignal;
+    private Signal eastRightSignal;
+    private Signal southLeftSignal;
+    private Signal southStraightSignal;
+    private Signal southRightSignal;
+    private Signal northLeftSignal;
+    private Signal northStraightSignal;
+    private Signal northRightSignal;
+    private Signal westLeftSignal;
+    private Signal westStraightSignal;
+    private Signal westRightSignal;
 
     @Override
     public void start(Stage stage) {
         root.setPrefSize(W, H);
 
+        // Draw the intersection one layer at a time. Later items appear on top.
         background();
         stopLines();   
         roads();
@@ -60,6 +92,12 @@ public class Crosswalk extends Application {
         pedestrians();
         antenna();
         signals();
+
+        // Listen for commands sent by Multiplexor through localhost port 5000.
+        startSocketServer();
+
+        // Cars are added last so they are visible above the road markings.
+        trafficSimulation();
 
         
         Group content = new Group(root);
@@ -75,6 +113,12 @@ public class Crosswalk extends Application {
         stage.setTitle("Crosswalk - Traffic Control System (Group 10)");
         stage.setScene(scene);
         stage.show();
+    }
+
+    @Override
+    public void stop() {
+        // Release the socket when the JavaFX window closes.
+        if (socketServer != null) socketServer.close();
     }
 
     // helpers
@@ -241,13 +285,13 @@ public class Crosswalk extends Application {
     // Clicking anywhere in a square makes every square + figure turn
     // orange and every colored signal turn red
     private void pedestrians() {
-        pedestrianZone(250, 198);   // north-west corner
-        pedestrianZone(783, 210);   // north-east corner
-        pedestrianZone(250, 765);   // south-west corner
-        pedestrianZone(785, 765);   // south-east corner
+        pedestrianZone("NW", 250, 198);   // north-west corner
+        pedestrianZone("NE", 783, 210);   // north-east corner
+        pedestrianZone("SW", 250, 765);   // south-west corner
+        pedestrianZone("SE", 785, 765);   // south-east corner
     }
 
-    private void pedestrianZone(double cx, double cy) {
+    private void pedestrianZone(String name, double cx, double cy) {
         double half = 26;
         Rectangle box = new Rectangle(cx - half, cy - half, half * 2, half * 2);
         box.setFill(Color.TRANSPARENT);   // transparent, but clickable
@@ -267,17 +311,22 @@ public class Crosswalk extends Application {
         Group g = new Group(box, head, body, arms, legL, legR);
         g.setCursor(Cursor.HAND);
         g.setOnMouseClicked(e -> {
-            pedAlarm = !pedAlarm;
-            if (pedAlarm) {
-                for (PedZone z : pedZones) z.alarm();
-                allSignalsRed();
-            } else {
-                for (PedZone z : pedZones) z.clear();
-            }
+            setPedestrianAlarm(!pedAlarm);
         });
 
-        pedZones.add(new PedZone(box, head, body, arms, legL, legR));
+        PedZone zone = new PedZone(box, head, body, arms, legL, legR);
+        pedZones.add(zone);
+        pedestrianByName.put(name, zone);
         add(g);
+    }
+
+    private void setPedestrianAlarm(boolean active) {
+        pedAlarm = active;
+        for (PedZone zone : pedZones) {
+            if (active) zone.alarm();
+            else zone.clear();
+        }
+        if (active) allSignalsRed();
     }
 
     private Line strokeLine(double x1, double y1, double x2, double y2) {
@@ -300,35 +349,60 @@ public class Crosswalk extends Application {
         knob.setStroke(RED);
         knob.setStrokeWidth(1.5);
         knob.setCursor(Cursor.HAND);
-        knob.setOnMouseClicked(e -> allSignalsRed());
+        knob.setOnMouseClicked(e -> activateEmergencyMode());
 
         add(label, knob);
     }
 
     // colored, clickable signals 
     private void signals() {
+        /*
+         * These first three signals are physically beside the north entrance.
+         * They control traffic coming from the opposite side, not our top cars.
+         */
         // North group (vertical, near x = 335)
-        arrowSignal(335, 292, "UP",   Light.YELLOW);
-        circleSignal(335, 366,        Light.RED);
-        arrowSignal(335, 440, "DOWN", Light.RED);
+        eastLeftSignal = arrowSignal(335, 292, "UP", Light.YELLOW);
+        eastStraightSignal = circleSignal(335, 366, Light.RED);
+        eastRightSignal = arrowSignal(335, 440, "DOWN", Light.RED);
 
         // East group (horizontal, near y = 291)
-        arrowSignal(556, 291, "LEFT",  Light.RED);
-        circleSignal(625, 291,         Light.GREEN);
-        arrowSignal(694, 291, "RIGHT", Light.YELLOW);
+        southLeftSignal = arrowSignal(556, 291, "LEFT", Light.RED);
+        southStraightSignal = circleSignal(625, 291, Light.GREEN);
+        southRightSignal = arrowSignal(694, 291, "RIGHT", Light.YELLOW);
 
+        /*
+         * IMPORTANT FOR THE DEMO:
+         * These three far-side signals control the cars entering from the top.
+         * Saving each returned Signal lets a Car check its exact light color.
+         */
         // West group (horizontal, near y = 652)
-        arrowSignal(338, 652, "LEFT",  Light.YELLOW);
-        circleSignal(405, 652,         Light.GREEN);
-        arrowSignal(473, 652, "RIGHT", Light.RED);
+        northLeftSignal = arrowSignal(338, 652, "LEFT", Light.YELLOW);
+        // This far-side signal controls traffic entering from the north.
+        northStraightSignal = circleSignal(405, 652, Light.GREEN);
+        northRightSignal = arrowSignal(473, 652, "RIGHT", Light.RED);
 
         // South group (vertical, near x = 693)
-        arrowSignal(693, 520, "UP",   Light.RED);
-        circleSignal(693, 590,        Light.RED);
-        arrowSignal(693, 660, "DOWN", Light.YELLOW);
+        westLeftSignal = arrowSignal(693, 520, "UP", Light.RED);
+        westStraightSignal = circleSignal(693, 590, Light.RED);
+        westRightSignal = arrowSignal(693, 660, "DOWN", Light.YELLOW);
+
+        // Public device names used by Multiplexor and the Main test harness.
+        signalByName.put("NORTH_LEFT", northLeftSignal);
+        signalByName.put("NORTH_STRAIGHT", northStraightSignal);
+        signalByName.put("NORTH_RIGHT", northRightSignal);
+        signalByName.put("SOUTH_LEFT", southLeftSignal);
+        signalByName.put("SOUTH_STRAIGHT", southStraightSignal);
+        signalByName.put("SOUTH_RIGHT", southRightSignal);
+        signalByName.put("EAST_LEFT", eastLeftSignal);
+        signalByName.put("EAST_STRAIGHT", eastStraightSignal);
+        signalByName.put("EAST_RIGHT", eastRightSignal);
+        signalByName.put("WEST_LEFT", westLeftSignal);
+        signalByName.put("WEST_STRAIGHT", westStraightSignal);
+        signalByName.put("WEST_RIGHT", westRightSignal);
     }
 
-    private void arrowSignal(double cx, double cy, String dir, Light initial) {
+    private Signal arrowSignal(double cx, double cy, String dir, Light initial) {
+        // Build one programmable arrow-shaped LED signal.
         Polygon a = new Polygon(
                   0, -29,
                  22,  -3,
@@ -345,14 +419,91 @@ public class Crosswalk extends Application {
             case "LEFT"  -> 270;
             default      -> 0;
         });
-        signals.add(new Signal(a, initial));
+        // Signal adds the click handler and stores the current light state.
+        Signal signal = new Signal(a, initial);
+        signals.add(signal);
         add(a);
+        return signal;
     }
 
-    private void circleSignal(double cx, double cy, Light initial) {
+    private Signal circleSignal(double cx, double cy, Light initial) {
+        // Build the programmable round LED used by a straight lane.
         Circle c = new Circle(cx, cy, 25);
-        signals.add(new Signal(c, initial));
+        Signal signal = new Signal(c, initial);
+        signals.add(signal);
         add(c);
+        return signal;
+    }
+
+    /**
+     * Cars for all three north approach lanes. Each car obeys its matching
+     * far-side arrow or round signal before entering the intersection.
+     */
+    private void trafficSimulation() {
+        /*
+         * Each route is an ordered list of {x, y} waypoints.
+         * Point 0 spawns the car, point 1 is its stop line, the middle points
+         * shape a turn, and the final point is beyond the edge of the window.
+         */
+        List<Car> cars = new ArrayList<>();
+
+        // TOP APPROACH: cars travel down into the intersection.
+        cars.add(new Car(new double[][]{{310,-60},{310,140},{310,400},{-80,400}},
+                Color.web("#eb5757"), northLeftSignal::isGreen));
+        cars.add(new Car(new double[][]{{374,-60},{374,140},{374,H+80}},
+                Color.web("#eb5757"), northStraightSignal::isGreen));
+        cars.add(new Car(new double[][]{{438,-60},{438,140},{438,520},{W+80,520}},
+                Color.web("#eb5757"), northRightSignal::isGreen));
+
+        // BOTTOM APPROACH: cars travel up into the intersection.
+        // Each turn is two straight segments, making a simple 90-degree corner.
+        cars.add(new Car(new double[][]{{560,H+60},{560,765},{560,400},{-80,400}},
+                Color.web("#9b51e0"), southLeftSignal::isGreen));
+        cars.add(new Car(new double[][]{{624,H+60},{624,765},{624,-80}},
+                Color.web("#9b51e0"), southStraightSignal::isGreen));
+        cars.add(new Car(new double[][]{{688,H+60},{688,765},{688,520},{W+80,520}},
+                Color.web("#9b51e0"), southRightSignal::isGreen));
+
+        // LEFT APPROACH: cars travel right into the intersection.
+        cars.add(new Car(new double[][]{{-60,533},{185,533},{560,533},{560,-80}},
+                Color.web("#f2994a"), westLeftSignal::isGreen));
+        cars.add(new Car(new double[][]{{-60,580},{185,580},{W+80,580}},
+                Color.web("#f2994a"), westStraightSignal::isGreen));
+        cars.add(new Car(new double[][]{{-60,627},{185,627},{438,627},{438,H+80}},
+                Color.web("#f2994a"), westRightSignal::isGreen));
+
+        // RIGHT APPROACH: cars travel left into the intersection.
+        // Exit through the right half of the top road (northbound traffic).
+        cars.add(new Car(new double[][]{{W+60,285},{800,285},{560,285},{560,-80}},
+                Color.web("#2d9cdb"), eastLeftSignal::isGreen));
+        cars.add(new Car(new double[][]{{W+60,345},{800,345},{-80,345}},
+                Color.web("#2d9cdb"), eastStraightSignal::isGreen));
+        // Exit through the left half of the bottom road (southbound traffic).
+        cars.add(new Car(new double[][]{{W+60,405},{800,405},{438,405},{438,H+80}},
+                Color.web("#2d9cdb"), eastRightSignal::isGreen));
+
+        add(cars.toArray(new Node[0]));
+
+        // AnimationTimer runs once per JavaFX frame while the window is open.
+        new AnimationTimer() {
+            private long previousTime;
+
+            @Override
+            public void handle(long now) {
+                if (previousTime == 0) {
+                    previousTime = now;
+                    return;
+                }
+
+                double elapsedSeconds = (now - previousTime) / 1_000_000_000.0;
+                previousTime = now;
+
+                // Pass elapsed time to every car so movement stays smooth.
+                for (Car car : cars) {
+                    car.update(elapsedSeconds);
+                }
+            }
+        }.start();
     }
 
     // actual code that turns every coloured signal to red (a pedestrian square or the antenna knob was clicked)
@@ -360,10 +511,79 @@ public class Crosswalk extends Application {
         for (Signal s : signals) s.forceRed();
     }
 
+    private void activateEmergencyMode() {
+        // The antenna represents an emergency command that stops all traffic.
+        allSignalsRed();
+    }
+
+    /* ---------------- SOCKET / DIGITAL-TWIN COMMANDS ---------------- */
+
+    private void startSocketServer() {
+        socketServer = new DigitalTwinServer(5000, this::handleSocketCommand);
+        socketServer.start();
+    }
+
+    /**
+     * Socket work happens on a background thread, but JavaFX objects may only
+     * be changed on the JavaFX Application Thread. Platform.runLater performs
+     * the command safely and CompletableFuture returns the response afterward.
+     */
+    private String handleSocketCommand(String command) {
+        CompletableFuture<String> response = new CompletableFuture<>();
+        Platform.runLater(() -> response.complete(executeCommand(command)));
+
+        try {
+            return response.get(2, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            return "ERROR GUI did not process command";
+        }
+    }
+
+    private String executeCommand(String command) {
+        try {
+            String[] parts = command.trim().toUpperCase().split("\\s+");
+
+            if (parts.length == 1 && parts[0].equals("PING")) {
+                return "OK DIGITAL_TWIN_READY";
+            }
+
+            if (parts.length == 3 && parts[0].equals("SET_SIGNAL")) {
+                Signal signal = signalByName.get(parts[1]);
+                if (signal == null) return "ERROR unknown signal " + parts[1];
+
+                signal.setLight(Light.valueOf(parts[2]));
+                return "OK " + parts[1] + " " + parts[2];
+            }
+
+            if (parts.length == 3 && parts[0].equals("PEDESTRIAN")) {
+                if (!pedestrianByName.containsKey(parts[1])) {
+                    return "ERROR unknown pedestrian zone " + parts[1];
+                }
+                if (!parts[2].equals("ON") && !parts[2].equals("OFF")) {
+                    return "ERROR pedestrian state must be ON or OFF";
+                }
+
+                setPedestrianAlarm(parts[2].equals("ON"));
+                return "OK PEDESTRIAN " + parts[1] + " " + parts[2];
+            }
+
+            if (parts.length == 2 && parts[0].equals("ANTENNA")
+                    && parts[1].equals("ACTIVATE")) {
+                activateEmergencyMode();
+                return "OK EMERGENCY_MODE";
+            }
+
+            return "ERROR invalid command";
+        } catch (IllegalArgumentException e) {
+            return "ERROR color must be GREEN, YELLOW, or RED";
+        }
+    }
+
     // signal state machine
     private enum Light {
         GREEN, YELLOW, RED;
 
+        // Clicking a signal advances through this testing cycle.
         Light next() {       // green -> yellow -> red -> green
             return values()[(ordinal() + 1) % values().length];
         }
@@ -388,6 +608,8 @@ public class Crosswalk extends Application {
             this.shape.setStroke(Color.web("#00000055"));
             this.shape.setStrokeWidth(1.5);
             this.shape.setCursor(Cursor.HAND);
+
+            // This is what makes every signal clickable during the demonstration.
             this.shape.setOnMouseClicked(e -> {
                 light = light.next();
                 paint();
@@ -402,6 +624,16 @@ public class Crosswalk extends Application {
         void forceRed() {
             light = Light.RED;
             paint();
+        }
+
+        void setLight(Light newLight) {
+            light = newLight;
+            paint();
+        }
+
+        boolean isGreen() {
+            // Cars call this method before crossing their stop line.
+            return light == Light.GREEN;
         }
     }
 
