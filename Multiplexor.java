@@ -35,7 +35,7 @@ public class Multiplexor implements AutoCloseable {
         return send("SET_SIGNAL " + signalName + " " + color);
     }
 
-    /** Pedestrian zone names: NW, NE, SW, or SE. */
+    /** Pedestrian zone names: NW, NE, SW, SE, or CENTER. */
     public String setPedestrian(String zoneName, boolean active) throws IOException {
         return send("PEDESTRIAN " + zoneName + " " + (active ? "ON" : "OFF"));
     }

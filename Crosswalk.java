@@ -39,7 +39,8 @@ public class Crosswalk extends Application {
      * ------------------
      * start()              builds the JavaFX window and calls each drawing method.
      * signals()            creates the clickable traffic lights.
-     * trafficSimulation()  creates the three cars and runs their animation.
+     * trafficSimulation()  creates all twelve cars and runs their animation.
+     * diagonalCrosswalk()  draws the X crossing through the intersection.
      * Signal               stores a light's current GREEN/YELLOW/RED state.
      * Car.java             contains the actual stopping and turning logic.
      */
@@ -89,15 +90,20 @@ public class Crosswalk extends Application {
         roads();
         crosswalks();
         laneArrows();
-        pedestrians();
         antenna();
         signals();
 
-        // Listen for commands sent by Multiplexor through localhost port 5000.
-        startSocketServer();
-
         // Cars are added last so they are visible above the road markings.
         trafficSimulation();
+
+        // Pedestrian controls remain visible and clickable above moving cars.
+        pedestrians();
+
+        // Keep the traffic signals visible when a car passes behind them.
+        for (Signal signal : signals) signal.bringToFront();
+
+        // Listen for commands sent by Multiplexor through localhost port 5000.
+        startSocketServer();
 
         
         Group content = new Group(root);
@@ -189,6 +195,34 @@ public class Crosswalk extends Application {
         crosswalkTicks(318, 709, 724, 756, true);   // bottom
         crosswalkTicks(246, 272, 292, 686, false);  // left
         crosswalkTicks(762, 788, 292, 686, false);  // right
+
+        // New diagonal pedestrian crossing requested for the center.
+        diagonalCrosswalk();
+    }
+
+    /** Draws two striped diagonal paths that form an X through the middle. */
+    private void diagonalCrosswalk() {
+        diagonalCrosswalkStripe(315, 265, 713, 695);
+        diagonalCrosswalkStripe(713, 265, 315, 695);
+    }
+
+    private void diagonalCrosswalkStripe(double x1, double y1,
+                                         double x2, double y2) {
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        double length = Math.hypot(dx, dy);
+        double px = -dy / length;
+        double py = dx / length;
+
+        int stripeCount = 23;
+        double halfStripe = 12;
+        for (int i = 0; i <= stripeCount; i++) {
+            double t = i / (double) stripeCount;
+            double x = x1 + dx * t;
+            double y = y1 + dy * t;
+            add(paint(x - px * halfStripe, y - py * halfStripe,
+                      x + px * halfStripe, y + py * halfStripe, 4));
+        }
     }
 
     // ladder-style crosswalk. vertical=true -> vertical ticks spread along x
@@ -289,35 +323,58 @@ public class Crosswalk extends Application {
         pedestrianZone("NE", 783, 210);   // north-east corner
         pedestrianZone("SW", 250, 765);   // south-west corner
         pedestrianZone("SE", 785, 765);   // south-east corner
+        // The center control uses a larger, solid panel so the white diagonal
+        // crosswalk stripes cannot show through and hide the stick figure.
+        pedestrianZone("CENTER", 514, 480, true);
     }
 
     private void pedestrianZone(String name, double cx, double cy) {
+        pedestrianZone(name, cx, cy, false);
+    }
+
+    private void pedestrianZone(String name, double cx, double cy,
+                                boolean centerControl) {
+        // All five pedestrian signs use the same 52-by-52 size.
         double half = 26;
         Rectangle box = new Rectangle(cx - half, cy - half, half * 2, half * 2);
-        box.setFill(Color.TRANSPARENT);   // transparent, but clickable
+        // The center gets a road-colored backing that hides the X stripes.
+        // Because it matches the road, it still looks like the corner signs.
+        Color normalFill = centerControl ? BG : Color.TRANSPARENT;
+        box.setFill(normalFill);
         box.setStroke(PAINT);
         box.setStrokeWidth(2);
         box.setPickOnBounds(true);        
 
-        Circle head = new Circle(cx, cy - 11, 6);
-        head.setStroke(PAINT);
+        double scale = 1.0;
+        // Every sign starts with the same white figure. alarm() changes every
+        // control to orange when a pedestrian control is pressed.
+        Color figureColor = PAINT;
+        Circle head = new Circle(cx, cy - 11 * scale, 6 * scale);
+        head.setStroke(figureColor);
         head.setStrokeWidth(2);
         head.setFill(Color.TRANSPARENT);
-        Line body = strokeLine(cx, cy - 5, cx, cy + 6);
-        Line arms = strokeLine(cx - 8, cy - 1, cx + 8, cy - 1);
-        Line legL = strokeLine(cx, cy + 6, cx - 7, cy + 17);
-        Line legR = strokeLine(cx, cy + 6, cx + 7, cy + 17);
-
+        Line body = strokeLine(cx, cy - 5 * scale, cx, cy + 6 * scale);
+        Line arms = strokeLine(cx - 8 * scale, cy - scale,
+                               cx + 8 * scale, cy - scale);
+        Line legL = strokeLine(cx, cy + 6 * scale,
+                               cx - 7 * scale, cy + 17 * scale);
+        Line legR = strokeLine(cx, cy + 6 * scale,
+                               cx + 7 * scale, cy + 17 * scale);
         Group g = new Group(box, head, body, arms, legL, legR);
         g.setCursor(Cursor.HAND);
         g.setOnMouseClicked(e -> {
             setPedestrianAlarm(!pedAlarm);
         });
 
-        PedZone zone = new PedZone(box, head, body, arms, legL, legR);
+        PedZone zone = new PedZone(normalFill, figureColor,
+                                   box, head, body, arms, legL, legR);
         pedZones.add(zone);
         pedestrianByName.put(name, zone);
         add(g);
+        if (centerControl) {
+            // Guarantee that cars, road markings, and signals cannot cover it.
+            g.toFront();
+        }
     }
 
     private void setPedestrianAlarm(boolean active) {
@@ -357,34 +414,30 @@ public class Crosswalk extends Application {
     // colored, clickable signals 
     private void signals() {
         /*
-         * These first three signals are physically beside the north entrance.
-         * They control traffic coming from the opposite side, not our top cars.
+         * Every signal is directly in front of the cars it controls.
+         * Each signal sits just beyond the stop line and aligns with its lane.
          */
-        // North group (vertical, near x = 335)
-        eastLeftSignal = arrowSignal(335, 292, "UP", Light.YELLOW);
-        eastStraightSignal = circleSignal(335, 366, Light.RED);
-        eastRightSignal = arrowSignal(335, 440, "DOWN", Light.RED);
 
-        // East group (horizontal, near y = 291)
-        southLeftSignal = arrowSignal(556, 291, "LEFT", Light.RED);
-        southStraightSignal = circleSignal(625, 291, Light.GREEN);
-        southRightSignal = arrowSignal(694, 291, "RIGHT", Light.YELLOW);
+        // NORTH/TOP approach: cars travel down toward y = 198.
+        northLeftSignal = arrowSignal(325, 270, "LEFT", Light.YELLOW);
+        northStraightSignal = circleSignal(389, 270, Light.GREEN);
+        northRightSignal = arrowSignal(453, 270, "RIGHT", Light.RED);
 
-        /*
-         * IMPORTANT FOR THE DEMO:
-         * These three far-side signals control the cars entering from the top.
-         * Saving each returned Signal lets a Car check its exact light color.
-         */
-        // West group (horizontal, near y = 652)
-        northLeftSignal = arrowSignal(338, 652, "LEFT", Light.YELLOW);
-        // This far-side signal controls traffic entering from the north.
-        northStraightSignal = circleSignal(405, 652, Light.GREEN);
-        northRightSignal = arrowSignal(473, 652, "RIGHT", Light.RED);
+        // SOUTH/BOTTOM approach: cars travel up toward y = 758.
+        southLeftSignal = arrowSignal(575, 690, "LEFT", Light.RED);
+        southStraightSignal = circleSignal(639, 690, Light.GREEN);
+        southRightSignal = arrowSignal(703, 690, "RIGHT", Light.YELLOW);
 
-        // South group (vertical, near x = 693)
-        westLeftSignal = arrowSignal(693, 520, "UP", Light.RED);
-        westStraightSignal = circleSignal(693, 590, Light.RED);
-        westRightSignal = arrowSignal(693, 660, "DOWN", Light.YELLOW);
+        // WEST/LEFT approach: cars travel right toward x = 244.
+        // These use 60-pixel spacing so the large LED symbols do not touch.
+        westLeftSignal = arrowSignal(300, 535, "UP", Light.RED);
+        westStraightSignal = circleSignal(300, 595, Light.RED);
+        westRightSignal = arrowSignal(300, 655, "DOWN", Light.YELLOW);
+
+        // EAST/RIGHT approach: cars travel left toward x = 790.
+        eastLeftSignal = arrowSignal(728, 300, "UP", Light.YELLOW);
+        eastStraightSignal = circleSignal(728, 360, Light.RED);
+        eastRightSignal = arrowSignal(728, 420, "DOWN", Light.RED);
 
         // Public device names used by Multiplexor and the Main test harness.
         signalByName.put("NORTH_LEFT", northLeftSignal);
@@ -635,13 +688,21 @@ public class Crosswalk extends Application {
             // Cars call this method before crossing their stop line.
             return light == Light.GREEN;
         }
+
+        void bringToFront() {
+            shape.toFront();
+        }
     }
 
     // Crossing signal stick figure and box
     private static final class PedZone {
+        private final Color normalFill;
+        private final Color normalStroke;
         private final Shape[] parts;
 
-        PedZone(Shape... parts) {
+        PedZone(Color normalFill, Color normalStroke, Shape... parts) {
+            this.normalFill = normalFill;
+            this.normalStroke = normalStroke;
             this.parts = parts;
         }
 
@@ -649,16 +710,19 @@ public class Crosswalk extends Application {
             for (Shape s : parts) {
                 s.setStroke(ORANGE);
                 if (s instanceof Rectangle r) {
-                    r.setFill(Color.web("#ff8c1a33"));
+                    // Keep the center island opaque even while its alarm is on.
+                    r.setFill(normalFill.equals(Color.TRANSPARENT)
+                              ? Color.web("#ff8c1a33")
+                              : Color.web("#5a2a00"));
                 }
             }
         }
 
         void clear() {
             for (Shape s : parts) {
-                s.setStroke(PAINT);
+                s.setStroke(normalStroke);
                 if (s instanceof Rectangle r) {
-                    r.setFill(Color.TRANSPARENT);
+                    r.setFill(normalFill);
                 }
             }
         }

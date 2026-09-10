@@ -19,7 +19,9 @@ public class Main {
         "WEST_LEFT", "WEST_STRAIGHT", "WEST_RIGHT"
     };
 
-    private static final String[] PEDESTRIANS = {"NW", "NE", "SW", "SE"};
+    private static final String[] PEDESTRIANS = {
+        "NW", "NE", "SW", "SE", "CENTER"
+    };
 
     public static void main(String[] args) {
         /*
@@ -58,7 +60,7 @@ public class Main {
                 }
                 System.out.println("Traffic-signal tests passed");
 
-                // Exercise all four pedestrian interfaces.
+                // Exercise the four corner controls and the center X-crosswalk control.
                 for (String zone : PEDESTRIANS) {
                     verify(mux.setPedestrian(zone, true));
                     Thread.sleep(500);
