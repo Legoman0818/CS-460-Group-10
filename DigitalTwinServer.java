@@ -11,15 +11,17 @@ import java.util.function.Function;
  *
  * It listens for text commands from Multiplexor and passes each command to
  * Crosswalk. Keeping networking here prevents socket code from cluttering the
- * JavaFX drawing code.
+ * JavaFX drawing code. This class does not decide traffic behavior; the
+ * supplied commandHandler decides what each received command means.
  */
 public class DigitalTwinServer implements AutoCloseable {
 
-    private final int port;
-    private final Function<String, String> commandHandler;
-    private ServerSocket serverSocket;
-    private volatile boolean running;
+    private final int port; // local port used by Multiplexor
+    private final Function<String, String> commandHandler; // Crosswalk callback
+    private ServerSocket serverSocket; // waits for incoming connections
+    private volatile boolean running; // visible to both server threads
 
+    /** Stores the port and the callback that will process received commands. */
     public DigitalTwinServer(int port, Function<String, String> commandHandler) {
         this.port = port;
         this.commandHandler = commandHandler;
@@ -35,11 +37,13 @@ public class DigitalTwinServer implements AutoCloseable {
         }
 
         Thread serverThread = new Thread(this::acceptClients, "digital-twin-server");
+        // A daemon thread will not keep the program alive after JavaFX closes.
         serverThread.setDaemon(true);
         serverThread.start();
         System.out.println("Digital Twin listening on port " + port);
     }
 
+    /** Waits for connections and gives every client its own reader thread. */
     private void acceptClients() {
         while (running) {
             try {
@@ -56,6 +60,7 @@ public class DigitalTwinServer implements AutoCloseable {
 
     /** Reads one command per line and sends one response per line. */
     private void handleClient(Socket client) {
+        // try-with-resources closes the client and streams after disconnect.
         try (Socket socket = client;
              BufferedReader input = new BufferedReader(
                      new InputStreamReader(socket.getInputStream()));
@@ -63,6 +68,7 @@ public class DigitalTwinServer implements AutoCloseable {
 
             String command;
             while ((command = input.readLine()) != null) {
+                // Multiplexor waits for one response for every command it sends.
                 output.println(commandHandler.apply(command));
             }
         } catch (IOException e) {
@@ -72,6 +78,7 @@ public class DigitalTwinServer implements AutoCloseable {
 
     @Override
     public void close() {
+        // Closing ServerSocket unblocks accept() so its loop can finish.
         running = false;
         if (serverSocket != null) {
             try {

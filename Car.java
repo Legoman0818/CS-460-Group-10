@@ -16,16 +16,17 @@ import javafx.scene.shape.Rectangle;
  */
 public class Car extends Group {
 
-    private static final double SPEED = 90; // pixels per second
+    private static final double SPEED = 90; // movement in pixels per second
 
-    private final double[][] route;
-    private final BooleanSupplier hasGreenLight;
+    private final double[][] route; // ordered {x, y} waypoints
+    private final BooleanSupplier hasGreenLight; // reads this lane's live signal
 
-    private double x;
+    private double x; // current position on the intersection pane
     private double y;
-    private int targetWaypoint;
-    private boolean enteredIntersection;
+    private int targetWaypoint; // waypoint the car is moving toward
+    private boolean enteredIntersection; // once true, the car must finish safely
 
+    /** Builds a colored car and assigns its route and traffic-light sensor. */
     public Car(double[][] route, Color color, BooleanSupplier hasGreenLight) {
         if (route == null || route.length < 3) {
             throw new IllegalArgumentException("A car route needs at least 3 waypoints");
@@ -93,6 +94,7 @@ public class Car extends Group {
         }
     }
 
+    /** Moves a safe distance toward the target using vector direction math. */
     private void moveTowardTarget(double distance) {
         double targetX = route[targetWaypoint][0];
         double targetY = route[targetWaypoint][1];
@@ -102,18 +104,21 @@ public class Car extends Group {
 
         if (remaining == 0) return;
 
+        // Math.min prevents a large frame from moving beyond the waypoint.
         double amount = Math.min(distance, remaining);
         x += dx / remaining * amount;
         y += dy / remaining * amount;
         updatePosition();
     }
 
+    /** Uses a small tolerance because animation positions are decimal values. */
     private boolean atTarget() {
         if (targetWaypoint >= route.length) return true;
         return Math.hypot(route[targetWaypoint][0] - x,
                           route[targetWaypoint][1] - y) < 0.01;
     }
 
+    /** Rotates the car whenever its route changes direction. */
     private void faceNextWaypoint() {
         if (targetWaypoint >= route.length) return;
 
@@ -124,11 +129,13 @@ public class Car extends Group {
         setRotate(Math.toDegrees(Math.atan2(dy, dx)) - 90);
     }
 
+    /** Copies the logical x/y position into the JavaFX Group. */
     private void updatePosition() {
         setLayoutX(x);
         setLayoutY(y);
     }
 
+    /** Sends the car back to its spawn point so traffic continues looping. */
     private void reset() {
         x = route[0][0];
         y = route[0][1];
