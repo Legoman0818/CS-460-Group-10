@@ -23,6 +23,16 @@ public class Multiplexor implements AutoCloseable {
     public enum SignalColor { RED, YELLOW, GREEN }
     public enum PedStatus { WALK, STOP }
 
+    /** Shared key format ("NORTH_LEFT", ...) used to look up one lane's signal or car. */
+    public static String laneKey(Direction direction, Lane lane) {
+        String laneName = switch (lane) {
+            case L -> "LEFT";
+            case R -> "RIGHT";
+            case C -> "STRAIGHT";
+        };
+        return direction + "_" + laneName;
+    }
+
     private final Socket socket;          // connection to the digital twin
     private final BufferedReader input;   // reads one response line at a time
     private final PrintWriter output;     // sends one command line at a time

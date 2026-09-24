@@ -94,6 +94,15 @@ public class Car extends Group {
         }
     }
 
+    /**
+     * True while this car is stopped at its lane's stop line waiting for
+     * green, the same condition a real induction loop embedded in the
+     * pavement there would sense as a vehicle sitting on top of it.
+     */
+    public boolean isWaitingAtStopLine() {
+        return targetWaypoint == 1 && !enteredIntersection && atTarget();
+    }
+
     /** Moves a safe distance toward the target using vector direction math. */
     private void moveTowardTarget(double distance) {
         double targetX = route[targetWaypoint][0];

@@ -1,16 +1,22 @@
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.io.IOException;
 
-import javafx.application.Application;
 import javafx.animation.AnimationTimer;
+import javafx.animation.PauseTransition;
+import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.scene.Group;
-import javafx.scene.Cursor;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.geometry.Insets;
@@ -18,36 +24,39 @@ import javafx.geometry.Pos;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.TextField;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
-import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
 import javafx.scene.shape.LineTo;
 import javafx.scene.shape.MoveTo;
 import javafx.scene.shape.Path;
-import javafx.scene.shape.Polygon;
 import javafx.scene.shape.QuadCurveTo;
 import javafx.scene.shape.Rectangle;
-import javafx.scene.shape.Shape;
 import javafx.scene.shape.StrokeLineCap;
 import javafx.scene.shape.StrokeLineJoin;
-import javafx.scene.text.Font;
-import javafx.scene.text.Text;
 import javafx.stage.Stage;
+import javafx.util.Duration;
 
 /**
  * JavaFX view and digital twin for the Traffic Control System.
  *
  * This class has three main jobs:
- * 1. Draw the intersection, signals, crosswalks, cars, and control panel.
- * 2. Display state changes requested by Controller through Multiplexor.
+ * 1. Draw the intersection and control panel, and own the six simulated
+ *    devices from the design diagram (Traffic Lights, Pedestrian Lights,
+ *    Pedestrian Call Button, Induction Sensor, Emergency Vehicle Detector,
+ *    Day/Night Timer) plus the Power Sensor.
+ * 2. Listen on a socket for commands sent by Multiplexor and dispatch each
+ *    one to the right device. The socket listener itself lives here too
+ *    (there is no separate server class) since Cross Walk is the single box
+ *    the diagram shows receiving commands.
  * 3. Animate ordinary cars and the selected emergency-vehicle route.
  *
- * Traffic decisions belong in Controller. Socket transport belongs in
- * Multiplexor and DigitalTwinServer. Crosswalk mainly shows their results.
+ * Traffic decisions belong in Controller. This class mainly carries out
+ * whatever Controller, through Multiplexor, asks the twin to do.
  * Launch from Main with a JavaFX-bundled JDK, such as Azul Zulu FX.
  */
 public class Crosswalk extends Application {
@@ -55,11 +64,11 @@ public class Crosswalk extends Application {
     /*
      * PRESENTATION GUIDE
      * ------------------
-     * start()              builds the JavaFX window and calls each drawing method.
-     * signals()            creates the programmable traffic lights.
-     * trafficSimulation()  creates all twelve cars and runs their animation.
-     * diagonalCrosswalk()  draws the X crossing through the intersection.
-     * Signal               stores a light's current GREEN/YELLOW/RED state.
+     * start()              builds the JavaFX window and every device.
+     * executeCommand()     the text protocol parser; one branch per device.
+     * TrafficLights.java, PedestrianLights.java, PedestrianCallButton.java,
+     * InductionSensor.java, EmergencyVehicleDetector.java, DayNightTimer.java,
+     * PowerSensor.java     one file per device shown in the design diagram.
      * Car.java             contains the actual stopping and turning logic.
      */
 
@@ -68,46 +77,142 @@ public class Crosswalk extends Application {
     private static final double W = 1024;
     private static final double H = 945;
 
-    // Shared colors keep the road and all signals visually consistent.
+    // Local socket port used for the Multiplexor <-> Cross Walk connection.
+    private static final int PORT = 5000;
+
+    // How long a granted pedestrian WALK phase holds all lanes red.
+    private static final double WALK_SECONDS = 10;
+
+    // Shared colors keep the road visually consistent with the devices.
     private static final Color BG      = Color.web("#0d0d0d");
     private static final Color PAINT   = Color.web("#f0f0f0"); // white road paint
 
-    private static final Color GREEN   = Color.web("#3f9e2e");
-    private static final Color YELLOW  = Color.web("#f4e017");
-    private static final Color RED     = Color.web("#cf1d1d");
-    private static final Color ORANGE  = Color.web("#ff8c1a"); // pedestrian alarm state
+    // The one true waypoint route for each approach lane. Ordinary cars use
+    // these to drive their lane, and an emergency vehicle reuses the exact
+    // same route for whichever lane its turn actually needs, so it always
+    // travels down a real lane instead of a separately-guessed path.
+    private static final Map<String, double[][]> LANE_ROUTES = buildLaneRoutes();
 
-    // Every road marking, signal, sign, and vehicle is placed on this pane.
+    private static Map<String, double[][]> buildLaneRoutes() {
+        Map<String, double[][]> routes = new LinkedHashMap<>();
+
+        // TOP APPROACH: cars travel down into the intersection. The x=325
+        // curb lane turns toward WEST (a real right turn); the x=453
+        // center-line lane turns toward EAST (a real left turn).
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.NORTH, Multiplexor.Lane.L),
+                new double[][]{{438,-60},{438,140},{438,520},{W+80,520}});
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.NORTH, Multiplexor.Lane.C),
+                new double[][]{{374,-60},{374,140},{374,H+80}});
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.NORTH, Multiplexor.Lane.R),
+                new double[][]{{310,-60},{310,140},{310,400},{-80,400}});
+
+        // BOTTOM APPROACH: cars travel up into the intersection.
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.SOUTH, Multiplexor.Lane.L),
+                new double[][]{{560,H+60},{560,765},{560,400},{-80,400}});
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.SOUTH, Multiplexor.Lane.C),
+                new double[][]{{624,H+60},{624,765},{624,-80}});
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.SOUTH, Multiplexor.Lane.R),
+                new double[][]{{688,H+60},{688,765},{688,520},{W+80,520}});
+
+        // LEFT APPROACH: cars travel right into the intersection.
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.WEST, Multiplexor.Lane.L),
+                new double[][]{{-60,533},{185,533},{560,533},{560,-80}});
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.WEST, Multiplexor.Lane.C),
+                new double[][]{{-60,580},{185,580},{W+80,580}});
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.WEST, Multiplexor.Lane.R),
+                new double[][]{{-60,627},{185,627},{438,627},{438,H+80}});
+
+        // RIGHT APPROACH: cars travel left into the intersection. The y=300
+        // curb lane turns toward NORTH (a real right turn); the y=420
+        // center-line lane turns toward SOUTH (a real left turn).
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.EAST, Multiplexor.Lane.L),
+                new double[][]{{W+60,405},{800,405},{438,405},{438,H+80}});
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.EAST, Multiplexor.Lane.C),
+                new double[][]{{W+60,345},{800,345},{-80,345}});
+        routes.put(Multiplexor.laneKey(Multiplexor.Direction.EAST, Multiplexor.Lane.R),
+                new double[][]{{W+60,285},{800,285},{560,285},{560,-80}});
+
+        return routes;
+    }
+
+    /** The color shared by every lane of one approach's ordinary traffic. */
+    private static Color approachColor(Multiplexor.Direction direction) {
+        return switch (direction) {
+            case NORTH -> Color.web("#eb5757");
+            case SOUTH -> Color.web("#9b51e0");
+            case WEST  -> Color.web("#f2994a");
+            case EAST  -> Color.web("#2d9cdb");
+        };
+    }
+
+    /**
+     * Which lane of an approach actually turns toward a destination, read
+     * directly off the lane routes above using the standard driving
+     * convention (LEFT crosses opposing through traffic, RIGHT hugs the
+     * curb). NORTH and SOUTH are mirror images of each other, as are EAST
+     * and WEST; every other pairing is the straight-through C lane.
+     */
+    private static Multiplexor.Lane laneFor(Multiplexor.Direction approach,
+                                            Multiplexor.Direction destination) {
+        return switch (approach) {
+            case NORTH -> destination == Multiplexor.Direction.EAST ? Multiplexor.Lane.L
+                        : destination == Multiplexor.Direction.WEST ? Multiplexor.Lane.R
+                        : Multiplexor.Lane.C;
+            case SOUTH -> destination == Multiplexor.Direction.WEST ? Multiplexor.Lane.L
+                        : destination == Multiplexor.Direction.EAST ? Multiplexor.Lane.R
+                        : Multiplexor.Lane.C;
+            case EAST -> destination == Multiplexor.Direction.SOUTH ? Multiplexor.Lane.L
+                       : destination == Multiplexor.Direction.NORTH ? Multiplexor.Lane.R
+                       : Multiplexor.Lane.C;
+            case WEST -> destination == Multiplexor.Direction.NORTH ? Multiplexor.Lane.L
+                       : destination == Multiplexor.Direction.SOUTH ? Multiplexor.Lane.R
+                       : Multiplexor.Lane.C;
+        };
+    }
+
+    // Every road marking, device, and vehicle is placed on this pane.
     private final Pane root = new Pane();
 
-    // Collections provide quick access when every light or sign must change.
-    private final List<Signal> signals = new ArrayList<>();
-    private final List<PedZone> pedZones = new ArrayList<>();
-    private final Map<String, Signal> signalByName = new HashMap<>();
-    // State shown by the digital twin. Controller owns the decision to change
-    // it, while this class owns how that state looks on screen.
-    private boolean pedAlarm = false;
-    private boolean running = false;
-    private String operatingMode = "DAY";
+    // The seven devices from the design diagram. Cross Walk owns each one and
+    // is the only class that talks to more than one of them at a time.
+    private TrafficLights trafficLights;
+    private PedestrianLights pedestrianLights;
+    private final PedestrianCallButton pedestrianCallButton = new PedestrianCallButton();
+    private InductionSensor inductionSensor;
+    private EmergencyVehicleDetector emergencyVehicleDetector;
+    private final DayNightTimer dayNightTimer = new DayNightTimer();
+    private final PowerSensor powerSensor = new PowerSensor();
+
+    // One simulated car per approach lane, keyed the same way as the traffic
+    // lights (Multiplexor.laneKey), so Induction Sensor can find each car.
+    private final Map<String, Car> carsByLane = new HashMap<>();
+
+    /**
+     * The intersection's single current operating state. Cross Walk is the
+     * only class that changes this, and every command handler goes through
+     * enterMode(...), so there is one place that decides what "day",
+     * "night", "an emergency vehicle is active", and "no power" each mean.
+     */
+    private enum Mode { STOPPED, DAY, NIGHT, EMERGENCY, NO_POWER }
+
+    private Mode mode = Mode.STOPPED;
+    private Mode modeBeforeEmergency = Mode.STOPPED;
+
+    // Drives the automatic signal cycle (green -> yellow -> next pattern).
+    // A pending pedestrian request is honored at the next transition instead
+    // of cutting the current pattern short.
+    private PauseTransition phaseTimer;
+    private boolean pedestrianWalkPending = false;
+
+    // Socket transport for the digital-twin protocol. Folded directly into
+    // this class instead of a separate server class, since Cross Walk is the
+    // single box in the design diagram that receives every command.
+    private ServerSocket serverSocket;
+    private volatile boolean serverRunning;
 
     // Communication and animation objects that must be stopped on shutdown.
-    private DigitalTwinServer socketServer;
     private Controller controller;
     private EmergencyVehicle activeEmergencyVehicle;
-
-    // Named references connect each lane's car with its programmable signal.
-    private Signal eastLeftSignal;
-    private Signal eastStraightSignal;
-    private Signal eastRightSignal;
-    private Signal southLeftSignal;
-    private Signal southStraightSignal;
-    private Signal southRightSignal;
-    private Signal northLeftSignal;
-    private Signal northStraightSignal;
-    private Signal northRightSignal;
-    private Signal westLeftSignal;
-    private Signal westStraightSignal;
-    private Signal westRightSignal;
 
     /** Builds the complete window, starts networking, and starts the system. */
     @Override
@@ -116,26 +221,38 @@ public class Crosswalk extends Application {
 
         // Draw the intersection one layer at a time. Later items appear on top.
         background();
-        stopLines();   
+        stopLines();
         roads();
         crosswalks();
         laneArrows();
-        antenna();
-        signals();
 
-        // Cars are added last so they are visible above the road markings.
+        emergencyVehicleDetector = new EmergencyVehicleDetector(root);
+
+        trafficLights = new TrafficLights(root, name -> sendControllerCommand(
+                "Manual signal change: " + name,
+                () -> controller.manualSignalChange(name)));
+
+        // Cars are added after the signals so they are visible above the road
+        // markings, and each one is registered so Induction Sensor can find it.
         trafficSimulation();
+        inductionSensor = new InductionSensor(carsByLane);
 
-        // Pedestrian controls remain visible above moving cars.
-        pedestrians();
+        // Pedestrian controls remain visible above moving cars. A click on a
+        // corner sign presses the Pedestrian Call Button, the same as the
+        // "Request Crossing" panel button does.
+        pedestrianLights = new PedestrianLights(root, BG, () -> {
+            pedestrianCallButton.press();
+            sendControllerCommand("Pedestrian crossing requested",
+                    () -> controller.pedestrianRequest());
+        });
 
         // Keep the traffic signals visible when a car passes behind them.
-        for (Signal signal : signals) signal.bringToFront();
+        trafficLights.bringAllToFront();
 
         // Listen for commands sent by Multiplexor through localhost port 5000.
         startSocketServer();
 
-        
+
         // Group the intersection separately so only it scales. The controls on
         // the right keep a readable, fixed width when the window is resized.
         Group content = new Group(root);
@@ -172,14 +289,14 @@ public class Crosswalk extends Application {
                 // The application is already closing.
             }
         }
-        if (socketServer != null) socketServer.close();
+        closeSocketServer();
     }
 
     /** Builds the right-side buttons, selectors, status area, and mode card. */
     private VBox createSimulationControls() {
         // The server is already listening, so the controller can connect now.
         try {
-            controller = new Controller("localhost", 5000);
+            controller = new Controller("localhost", PORT);
         } catch (IOException e) {
             throw new IllegalStateException("Could not connect Controller", e);
         }
@@ -211,7 +328,7 @@ public class Crosswalk extends Application {
 
         Button pedestrian = controlButton("Request Crossing", "#1e3a5f");
         pedestrian.setOnAction(e -> sendControllerCommand(
-                "Pedestrian crossing active for 10 seconds",
+                "Pedestrian crossing requested; will WALK at the next signal change",
                 () -> controller.pedestrianRequest(),
                 status));
 
@@ -261,9 +378,27 @@ public class Crosswalk extends Application {
 
         VBox modeCard = card(modeLabel, modeValue, dayNight);
 
+        Label timingLabel = sectionLabel("SIGNAL TIMING");
+        Label timingCaption = fieldLabel("GREEN INTERVAL, SECONDS (YELLOW IS 1/5 OF IT)");
+        TextField intervalField = new TextField(
+                String.valueOf((int) dayNightTimer.getIntervalSeconds()));
+        Button applyInterval = controlButton("Apply Interval", "#334155");
+        applyInterval.setOnAction(e -> {
+            try {
+                double seconds = Double.parseDouble(intervalField.getText().trim());
+                if (seconds <= 0) throw new NumberFormatException();
+                dayNightTimer.setIntervalSeconds(seconds);
+                status.setText("●  Signal interval set to " + seconds
+                        + "s (yellow " + (seconds / 5.0) + "s)");
+            } catch (NumberFormatException ex) {
+                status.setText("●  Enter a positive number of seconds");
+            }
+        });
+        VBox timingCard = card(timingLabel, timingCaption, intervalField, applyInterval);
+
         VBox header = new VBox(2, title, subtitle);
         VBox panel = new VBox(16, header, status, systemCard,
-                emergencyCard, modeCard);
+                emergencyCard, modeCard, timingCard);
         panel.setPadding(new Insets(22, 18, 22, 18));
         panel.setPrefWidth(290);
         panel.setMinWidth(290);
@@ -403,16 +538,16 @@ public class Crosswalk extends Application {
         add(dashed(xR, 480, W, 480, 3, 22, 18));
 
         // lanes(the boxes the turn arrows sit in). 3 lanes each
-        // left 
+        // left
         for (double y : new double[]{486, 559, 632, 705}) add(paint(0, y, 210, y, 2));
         add(paint(210, 486, 210, 705, 2));
         // right
         for (double y : new double[]{252, 324, 396, 468}) add(paint(812, y, W, y, 2));
         add(paint(812, 252, 812, 468, 2));
-        // top 
+        // top
         for (double x : new double[]{293, 357, 421, 485}) add(paint(x, 0, x, 168, 2));
         add(paint(293, 168, 485, 168, 2));
-        // bottom 
+        // bottom
         for (double x : new double[]{543, 607, 671, 735}) add(paint(x, 775, x, H, 2));
         add(paint(543, 775, 735, 775, 2));
     }
@@ -472,13 +607,13 @@ public class Crosswalk extends Application {
 
     /** Draws the four thick lines where approaching cars must stop. */
     private void stopLines() {
-        add(paint(293, 198, 514, 198, 6)); // north 
-        add(paint(514, 758, 735, 758, 6)); // south 
-        add(paint(244, 480, 244, 713, 6)); // west 
+        add(paint(293, 198, 514, 198, 6)); // north
+        add(paint(514, 758, 735, 758, 6)); // south
+        add(paint(244, 480, 244, 713, 6)); // west
         add(paint(790, 246, 790, 480, 6)); // east
     }
 
-    //  white lane arrows 
+    //  white lane arrows
     // Each approach has 3 lanes: [turn left] [straight] [turn right],
     private void laneArrows() {
         // top. traffic travels down
@@ -489,7 +624,7 @@ public class Crosswalk extends Application {
         laneArrow(575, 933, 0, -1, -1, 0);
         laneArrow(639, 933, 0, -1, 0, 0);
         laneArrow(703, 933, 0, -1, 1, 0);
-        // left. traffic travels right 
+        // left. traffic travels right
         laneArrow(6, 548, 1, 0, 0, -1, 74, 44, 150);
         laneArrow(6, 595, 1, 0, 0,  0, 74, 44, 150);
         laneArrow(6, 642, 1, 0, 0,  1, 74, 44, 150);
@@ -546,190 +681,11 @@ public class Crosswalk extends Application {
         p.getElements().add(new LineTo(bx - px * s, by - py * s));
     }
 
-    // pedestrian crossing signs
-    // One square per corner with a stick figure 
-    // Each square displays the state of its pedestrian crossing.
-    /** Creates the four corner signs and the protected center pedestrian sign. */
-    private void pedestrians() {
-        pedestrianZone("NW", 250, 198);   // north-west corner
-        pedestrianZone("NE", 783, 210);   // north-east corner
-        pedestrianZone("SW", 250, 765);   // south-west corner
-        pedestrianZone("SE", 785, 765);   // south-east corner
-        // The center control uses a larger, solid panel so the white diagonal
-        // crosswalk stripes cannot show through and hide the stick figure.
-        pedestrianZone("CENTER", 514, 480, true);
-    }
-
-    /** Convenience overload used by normal corner pedestrian signs. */
-    private void pedestrianZone(String name, double cx, double cy) {
-        pedestrianZone(name, cx, cy, false);
-    }
-
-    /** Builds one pedestrian sign from a box and a simple stick figure. */
-    private void pedestrianZone(String name, double cx, double cy,
-                                boolean centerControl) {
-        // All five pedestrian signs use the same 52-by-52 size.
-        double half = 26;
-        Rectangle box = new Rectangle(cx - half, cy - half, half * 2, half * 2);
-        // The center gets a road-colored backing that hides the X stripes.
-        // Because it matches the road, it still looks like the corner signs.
-        Color normalFill = centerControl ? BG : Color.TRANSPARENT;
-        box.setFill(normalFill);
-        box.setStroke(PAINT);
-        box.setStrokeWidth(2);
-        box.setPickOnBounds(true);        
-
-        double scale = 1.0;
-        // Every sign starts with the same white figure. alarm() changes every
-        // control to orange when a pedestrian control is pressed.
-        Color figureColor = PAINT;
-        Circle head = new Circle(cx, cy - 11 * scale, 6 * scale);
-        head.setStroke(figureColor);
-        head.setStrokeWidth(2);
-        head.setFill(Color.TRANSPARENT);
-        Line body = strokeLine(cx, cy - 5 * scale, cx, cy + 6 * scale);
-        Line arms = strokeLine(cx - 8 * scale, cy - scale,
-                               cx + 8 * scale, cy - scale);
-        Line legL = strokeLine(cx, cy + 6 * scale,
-                               cx - 7 * scale, cy + 17 * scale);
-        Line legR = strokeLine(cx, cy + 6 * scale,
-                               cx + 7 * scale, cy + 17 * scale);
-        Group g = new Group(box, head, body, arms, legL, legR);
-        PedZone zone = new PedZone(normalFill, figureColor,
-                                   box, head, body, arms, legL, legR);
-        pedZones.add(zone);
-        add(g);
-        if (centerControl) {
-            // Guarantee that cars, road markings, and signals cannot cover it.
-            g.toFront();
-        }
-    }
-
-    /** Changes every pedestrian sign together and makes traffic all red. */
-    private void setPedestrianAlarm(boolean active) {
-        pedAlarm = active;
-        for (PedZone zone : pedZones) {
-            if (active) zone.alarm();
-            else zone.clear();
-        }
-        if (active) allSignalsRed();
-    }
-
-    /** Creates the rounded white lines used to build pedestrian figures. */
-    private Line strokeLine(double x1, double y1, double x2, double y2) {
-        Line l = new Line(x1, y1, x2, y2);
-        l.setStroke(PAINT);
-        l.setStrokeWidth(2);
-        l.setStrokeLineCap(StrokeLineCap.ROUND);
-        return l;
-    }
-
-    /** Draws the antenna symbol representing emergency-vehicle detection. */
-    private void antenna() {
-        add(strokeLine(823, 178, 823, 197));
-        Text label = new Text(834, 201, "Antenna");
-        label.setFill(PAINT);
-        label.setFont(Font.font(12));
-
-        Circle knob = new Circle(823, 172, 6);
-        knob.setFill(PAINT);
-        knob.setStroke(RED);
-        knob.setStrokeWidth(1.5);
-        add(label, knob);
-    }
-
-    // Creates all twelve programmable signals and assigns one to each lane.
-    private void signals() {
-        /*
-         * Every signal is directly in front of the cars it controls.
-         * Each signal sits just beyond the stop line and aligns with its lane.
-         */
-
-        // NORTH/TOP approach: cars travel down toward y = 198.
-        northLeftSignal = arrowSignal(325, 270, "LEFT", Light.YELLOW);
-        northStraightSignal = circleSignal(389, 270, Light.GREEN);
-        northRightSignal = arrowSignal(453, 270, "RIGHT", Light.RED);
-
-        // SOUTH/BOTTOM approach: cars travel up toward y = 758.
-        southLeftSignal = arrowSignal(575, 690, "LEFT", Light.RED);
-        southStraightSignal = circleSignal(639, 690, Light.GREEN);
-        southRightSignal = arrowSignal(703, 690, "RIGHT", Light.YELLOW);
-
-        // WEST/LEFT approach: cars travel right toward x = 244.
-        // These use 60-pixel spacing so the large LED symbols do not touch.
-        westLeftSignal = arrowSignal(300, 535, "UP", Light.RED);
-        westStraightSignal = circleSignal(300, 595, Light.RED);
-        westRightSignal = arrowSignal(300, 655, "DOWN", Light.YELLOW);
-
-        // EAST/RIGHT approach: cars travel left toward x = 790.
-        eastLeftSignal = arrowSignal(728, 300, "UP", Light.YELLOW);
-        eastStraightSignal = circleSignal(728, 360, Light.RED);
-        eastRightSignal = arrowSignal(728, 420, "DOWN", Light.RED);
-
-        registerSignal("NORTH_LEFT", northLeftSignal);
-        registerSignal("NORTH_STRAIGHT", northStraightSignal);
-        registerSignal("NORTH_RIGHT", northRightSignal);
-        registerSignal("SOUTH_LEFT", southLeftSignal);
-        registerSignal("SOUTH_STRAIGHT", southStraightSignal);
-        registerSignal("SOUTH_RIGHT", southRightSignal);
-        registerSignal("EAST_LEFT", eastLeftSignal);
-        registerSignal("EAST_STRAIGHT", eastStraightSignal);
-        registerSignal("EAST_RIGHT", eastRightSignal);
-        registerSignal("WEST_LEFT", westLeftSignal);
-        registerSignal("WEST_STRAIGHT", westStraightSignal);
-        registerSignal("WEST_RIGHT", westRightSignal);
-
-    }
-
-    /** Stores a signal by name and makes its JavaFX shape clickable. */
-    private void registerSignal(String name, Signal signal) {
-        signalByName.put(name, signal);
-        signal.shape.setCursor(Cursor.HAND);
-        signal.shape.setOnMouseClicked(e -> sendControllerCommand(
-                "Manual signal change: " + name,
-                () -> controller.manualSignalChange(name)));
-    }
-
-    /** Builds an arrow-shaped programmable LED signal. */
-    private Signal arrowSignal(double cx, double cy, String dir, Light initial) {
-        // Build one programmable arrow-shaped LED signal.
-        Polygon a = new Polygon(
-                  0, -29,
-                 22,  -3,
-                 10,  -3,
-                 10,  29,
-                -10,  29,
-                -10,  -3,
-                -22,  -3);
-        a.setLayoutX(cx);
-        a.setLayoutY(cy);
-        a.setRotate(switch (dir) {
-            case "RIGHT" -> 90;
-            case "DOWN"  -> 180;
-            case "LEFT"  -> 270;
-            default      -> 0;
-        });
-        Signal signal = new Signal(a, initial);
-        signals.add(signal);
-        add(a);
-        return signal;
-    }
-
-    /** Builds a round programmable LED signal for a straight lane. */
-    private Signal circleSignal(double cx, double cy, Light initial) {
-        // Build the programmable round LED used by a straight lane.
-        Circle c = new Circle(cx, cy, 25);
-        Signal signal = new Signal(c, initial);
-        signals.add(signal);
-        add(c);
-        return signal;
-    }
-
     /**
-     * Cars for all three north approach lanes. Each car obeys its matching
-     * far-side arrow or round signal before entering the intersection.
+     * Cars for all twelve approach lanes. Each car obeys its matching
+     * Traffic Lights signal before entering the intersection, and is
+     * registered under the same lane key so Induction Sensor can find it.
      */
-    /** Creates the twelve looping cars and advances them every JavaFX frame. */
     private void trafficSimulation() {
         /*
          * Each route is an ordered list of {x, y} waypoints.
@@ -738,40 +694,15 @@ public class Crosswalk extends Application {
          */
         List<Car> cars = new ArrayList<>();
 
-        // TOP APPROACH: cars travel down into the intersection.
-        cars.add(new Car(new double[][]{{310,-60},{310,140},{310,400},{-80,400}},
-                Color.web("#eb5757"), northLeftSignal::isGreen));
-        cars.add(new Car(new double[][]{{374,-60},{374,140},{374,H+80}},
-                Color.web("#eb5757"), northStraightSignal::isGreen));
-        cars.add(new Car(new double[][]{{438,-60},{438,140},{438,520},{W+80,520}},
-                Color.web("#eb5757"), northRightSignal::isGreen));
-
-        // BOTTOM APPROACH: cars travel up into the intersection.
-        // Each turn is two straight segments, making a simple 90-degree corner.
-        cars.add(new Car(new double[][]{{560,H+60},{560,765},{560,400},{-80,400}},
-                Color.web("#9b51e0"), southLeftSignal::isGreen));
-        cars.add(new Car(new double[][]{{624,H+60},{624,765},{624,-80}},
-                Color.web("#9b51e0"), southStraightSignal::isGreen));
-        cars.add(new Car(new double[][]{{688,H+60},{688,765},{688,520},{W+80,520}},
-                Color.web("#9b51e0"), southRightSignal::isGreen));
-
-        // LEFT APPROACH: cars travel right into the intersection.
-        cars.add(new Car(new double[][]{{-60,533},{185,533},{560,533},{560,-80}},
-                Color.web("#f2994a"), westLeftSignal::isGreen));
-        cars.add(new Car(new double[][]{{-60,580},{185,580},{W+80,580}},
-                Color.web("#f2994a"), westStraightSignal::isGreen));
-        cars.add(new Car(new double[][]{{-60,627},{185,627},{438,627},{438,H+80}},
-                Color.web("#f2994a"), westRightSignal::isGreen));
-
-        // RIGHT APPROACH: cars travel left into the intersection.
-        // Exit through the right half of the top road (northbound traffic).
-        cars.add(new Car(new double[][]{{W+60,285},{800,285},{560,285},{560,-80}},
-                Color.web("#2d9cdb"), eastLeftSignal::isGreen));
-        cars.add(new Car(new double[][]{{W+60,345},{800,345},{-80,345}},
-                Color.web("#2d9cdb"), eastStraightSignal::isGreen));
-        // Exit through the left half of the bottom road (southbound traffic).
-        cars.add(new Car(new double[][]{{W+60,405},{800,405},{438,405},{438,H+80}},
-                Color.web("#2d9cdb"), eastRightSignal::isGreen));
+        for (Map.Entry<String, double[][]> entry : LANE_ROUTES.entrySet()) {
+            String key = entry.getKey();
+            Multiplexor.Direction direction =
+                    Multiplexor.Direction.valueOf(key.substring(0, key.indexOf('_')));
+            Car c = new Car(entry.getValue(), approachColor(direction),
+                    () -> trafficLights.isGreen(key));
+            carsByLane.put(key, c);
+            cars.add(c);
+        }
 
         add(cars.toArray(new Node[0]));
 
@@ -790,42 +721,121 @@ public class Crosswalk extends Application {
                 previousTime = now;
 
                 // Pass elapsed time to every car so movement stays smooth.
-                for (Car car : cars) {
-                    car.update(elapsedSeconds);
+                for (Car c : cars) {
+                    c.update(elapsedSeconds);
                 }
             }
         }.start();
     }
 
-    // Places the intersection in a safe all-red state.
-    private void allSignalsRed() {
-        for (Signal s : signals) s.forceRed();
+    /**
+     * The single place every mode transition goes through: cancel whatever
+     * was happening, force a safe all-red state, then apply the new mode.
+     * DAY resumes the automatic cycle; NIGHT, EMERGENCY, NO_POWER, and
+     * STOPPED all simply stay all-red (EMERGENCY_DETECTED greens its own
+     * lane right after calling this).
+     */
+    private void enterMode(Mode newMode) {
+        mode = newMode;
+        stopSignalCycle();
+        setPedestrianWalk(false);
+        trafficLights.allRed();
+        if (mode == Mode.DAY) {
+            startSignalCycle();
+        }
     }
 
-    /** Restores the default day pattern, or all red when not in day mode. */
-    private void applyNormalPattern() {
-        setPedestrianAlarm(false);
-        allSignalsRed();
-        if (running && operatingMode.equals("DAY")) {
-            northStraightSignal.setLight(Light.GREEN);
-            southStraightSignal.setLight(Light.GREEN);
+    /** Changes the pedestrian devices together and makes traffic all red. */
+    private void setPedestrianWalk(boolean active) {
+        pedestrianLights.setWalk(active);
+        if (active) trafficLights.allRed();
+    }
+
+    /* ---------------- AUTOMATIC SIGNAL CYCLE ----------------
+     * A basic real intersection does not sit on one pattern forever: it steps
+     * through a fixed sequence of green phases, warns with yellow, and moves
+     * on. This runs entirely on the JavaFX thread via PauseTransition, so it
+     * never needs Platform.runLater the way the socket-driven commands do.
+     */
+
+    /** Begins the pattern cycle at its first phase. */
+    private void startSignalCycle() {
+        runSignalPattern(0);
+    }
+
+    /** Cancels any in-flight phase timer and forgets a pending walk request. */
+    private void stopSignalCycle() {
+        pedestrianWalkPending = false;
+        if (phaseTimer != null) {
+            phaseTimer.stop();
+            phaseTimer = null;
+        }
+    }
+
+    /** Shows one pattern's green, then its yellow, then moves to the next. */
+    private void runSignalPattern(int index) {
+        TrafficLights.Pattern[] patterns = TrafficLights.Pattern.values();
+        TrafficLights.Pattern pattern = patterns[Math.floorMod(index, patterns.length)];
+
+        trafficLights.showGreen(pattern);
+        schedulePhase(dayNightTimer.getIntervalSeconds(), () -> {
+            trafficLights.showYellow(pattern);
+            schedulePhase(dayNightTimer.getIntervalSeconds() / 5.0, () -> {
+                if (pedestrianWalkPending) {
+                    pedestrianWalkPending = false;
+                    runPedestrianPhase(index);
+                } else {
+                    runSignalPattern(index + 1);
+                }
+            });
+        });
+    }
+
+    /** Holds the pedestrian WALK phase for its full duration, then resumes. */
+    private void runPedestrianPhase(int completedIndex) {
+        setPedestrianWalk(true);
+        schedulePhase(WALK_SECONDS, () -> {
+            setPedestrianWalk(false);
+            runSignalPattern(completedIndex + 1);
+        });
+    }
+
+    /** Runs action after a delay, on the JavaFX thread, cancelable via stopSignalCycle(). */
+    private void schedulePhase(double seconds, Runnable action) {
+        phaseTimer = new PauseTransition(Duration.seconds(seconds));
+        phaseTimer.setOnFinished(e -> action.run());
+        phaseTimer.play();
+    }
+
+    /**
+     * Notes a pedestrian WALK request. If the automatic cycle is running, the
+     * request waits for the next gap between patterns instead of cutting the
+     * current green or yellow phase short; otherwise (night mode, or the
+     * system is stopped) there is no cycle to wait for, so it is granted now.
+     */
+    private void requestPedestrianWalk() {
+        if (mode == Mode.DAY && phaseTimer != null) {
+            pedestrianWalkPending = true;
+        } else {
+            setPedestrianWalk(true);
+            schedulePhase(WALK_SECONDS, () -> setPedestrianWalk(false));
         }
     }
 
     /** Replaces any previous emergency animation and starts the chosen route. */
-    private void animateEmergencyVehicle(Multiplexor.Direction approach,
-                                         Multiplexor.Direction destination) {
+    private void animateEmergencyVehicle(Multiplexor.Direction approach, Multiplexor.Lane lane) {
         if (activeEmergencyVehicle != null) {
             activeEmergencyVehicle.stop();
             root.getChildren().remove(activeEmergencyVehicle);
         }
 
-        activeEmergencyVehicle = new EmergencyVehicle(
-                emergencyRoute(approach, destination), () -> {
-                    root.getChildren().remove(activeEmergencyVehicle);
-                    activeEmergencyVehicle = null;
-                    applyNormalPattern();
-                });
+        double[][] route = LANE_ROUTES.get(Multiplexor.laneKey(approach, lane));
+        activeEmergencyVehicle = new EmergencyVehicle(route, () -> {
+            root.getChildren().remove(activeEmergencyVehicle);
+            activeEmergencyVehicle = null;
+            emergencyVehicleDetector.clearActiveApproach();
+            enterMode(modeBeforeEmergency);
+        });
         add(activeEmergencyVehicle);
         activeEmergencyVehicle.toFront();
         activeEmergencyVehicle.play();
@@ -838,74 +848,70 @@ public class Crosswalk extends Application {
             root.getChildren().remove(activeEmergencyVehicle);
             activeEmergencyVehicle = null;
         }
-    }
-
-    /**
-     * Builds the waypoint list for one emergency route.
-     *
-     * Opposite-side routes remain straight in their travel lane. Turning
-     * routes combine the entry lane and exit lane at one corner, producing two
-     * perpendicular segments instead of a diagonal path through the center.
-     */
-    private double[][] emergencyRoute(Multiplexor.Direction approach,
-                                      Multiplexor.Direction destination) {
-        // Straight routes stay in the travel lane instead of cutting to the
-        // exact center and then cutting back out.
-        if (approach == Multiplexor.Direction.NORTH
-                && destination == Multiplexor.Direction.SOUTH) {
-            return new double[][]{
-                {389, -70}, {389, 198}, {389, 713}, {389, H + 80}
-            };
-        }
-        if (approach == Multiplexor.Direction.SOUTH
-                && destination == Multiplexor.Direction.NORTH) {
-            return new double[][]{
-                {639, H + 70}, {639, 758}, {639, 246}, {639, -80}
-            };
-        }
-        if (approach == Multiplexor.Direction.WEST
-                && destination == Multiplexor.Direction.EAST) {
-            return new double[][]{
-                {-70, 595}, {244, 595}, {735, 595}, {W + 80, 595}
-            };
-        }
-        if (approach == Multiplexor.Direction.EAST
-                && destination == Multiplexor.Direction.WEST) {
-            return new double[][]{
-                {W + 70, 360}, {790, 360}, {293, 360}, {-80, 360}
-            };
-        }
-
-        double[][] entry = switch (approach) {
-            case NORTH -> new double[][]{{389, -70}, {389, 198}};
-            case SOUTH -> new double[][]{{639, H + 70}, {639, 758}};
-            case EAST  -> new double[][]{{W + 70, 360}, {790, 360}};
-            case WEST  -> new double[][]{{-70, 595}, {244, 595}};
-        };
-
-        double[] exit = switch (destination) {
-            case NORTH -> new double[]{560, -80};
-            case SOUTH -> new double[]{438, H + 80};
-            case EAST  -> new double[]{W + 80, 520};
-            case WEST  -> new double[]{-80, 400};
-        };
-
-        // Keep one coordinate from each lane to create a 90-degree corner.
-        boolean enteringVertically = approach == Multiplexor.Direction.NORTH
-                || approach == Multiplexor.Direction.SOUTH;
-        double[] corner = enteringVertically
-                ? new double[]{entry[1][0], exit[1]}
-                : new double[]{exit[0], entry[1][1]};
-
-        return new double[][]{entry[0], entry[1], corner, exit};
+        emergencyVehicleDetector.clearActiveApproach();
     }
 
     /* ---------------- SOCKET / DIGITAL-TWIN COMMANDS ---------------- */
 
+    /** Opens the port and starts accepting clients on a background thread. */
     private void startSocketServer() {
-        // Crosswalk supplies the command callback; the server handles sockets.
-        socketServer = new DigitalTwinServer(5000, this::handleSocketCommand);
-        socketServer.start();
+        try {
+            serverSocket = new ServerSocket(PORT);
+            serverRunning = true;
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not open Digital Twin port " + PORT, e);
+        }
+
+        Thread serverThread = new Thread(this::acceptClients, "digital-twin-server");
+        // A daemon thread will not keep the program alive after JavaFX closes.
+        serverThread.setDaemon(true);
+        serverThread.start();
+        System.out.println("Digital Twin listening on port " + PORT);
+    }
+
+    /** Waits for connections and gives every client its own reader thread. */
+    private void acceptClients() {
+        while (serverRunning) {
+            try {
+                Socket client = serverSocket.accept();
+                Thread clientThread = new Thread(
+                        () -> handleClient(client), "digital-twin-client");
+                clientThread.setDaemon(true);
+                clientThread.start();
+            } catch (IOException e) {
+                if (serverRunning) System.err.println("Socket accept error: " + e.getMessage());
+            }
+        }
+    }
+
+    /** Reads one command per line and sends one response per line. */
+    private void handleClient(Socket client) {
+        // try-with-resources closes the client and streams after disconnect.
+        try (Socket socket = client;
+             BufferedReader input = new BufferedReader(
+                     new InputStreamReader(socket.getInputStream()));
+             PrintWriter output = new PrintWriter(socket.getOutputStream(), true)) {
+
+            String command;
+            while ((command = input.readLine()) != null) {
+                // Multiplexor waits for one response for every command it sends.
+                output.println(handleSocketCommand(command));
+            }
+        } catch (IOException e) {
+            System.err.println("Client connection error: " + e.getMessage());
+        }
+    }
+
+    /** Stops accepting clients and releases the port. */
+    private void closeSocketServer() {
+        serverRunning = false;
+        if (serverSocket != null) {
+            try {
+                serverSocket.close();
+            } catch (IOException ignored) {
+                // The application is already closing.
+            }
+        }
     }
 
     /**
@@ -936,39 +942,42 @@ public class Crosswalk extends Application {
 
             // System lifecycle commands.
             if (parts.length == 1 && parts[0].equals("START")) {
-                running = true;
-                applyNormalPattern();
+                enterMode(dayNightTimer.isDay() ? Mode.DAY : Mode.NIGHT);
                 return "OK STARTED";
             }
 
             if (parts.length == 1 && parts[0].equals("RESET")) {
                 stopEmergencyVehicle();
-                running = false;
-                operatingMode = "DAY";
-                setPedestrianAlarm(false);
-                allSignalsRed();
+                dayNightTimer.set(Multiplexor.Mode.DAY);
+                powerSensor.restore();
+                enterMode(Mode.STOPPED);
                 return "OK RESET";
             }
 
             if (parts.length == 2 && parts[0].equals("SET_MODE")) {
-                if (activeEmergencyVehicle != null) {
+                if (mode == Mode.EMERGENCY) {
                     return "ERROR emergency vehicle is crossing";
                 }
-                if (!parts[1].equals("DAY") && !parts[1].equals("NIGHT")) {
+                Multiplexor.Mode dayNightMode;
+                try {
+                    dayNightMode = Multiplexor.Mode.valueOf(parts[1]);
+                } catch (IllegalArgumentException e) {
                     return "ERROR mode must be DAY or NIGHT";
                 }
-                operatingMode = parts[1];
-                applyNormalPattern();
-                return "OK MODE " + operatingMode;
+                dayNightTimer.set(dayNightMode);
+                if (mode != Mode.STOPPED && mode != Mode.NO_POWER) {
+                    enterMode(dayNightMode == Multiplexor.Mode.DAY ? Mode.DAY : Mode.NIGHT);
+                }
+                return "OK MODE " + dayNightMode;
             }
 
             // Device API commands used by Multiplexor's five public methods.
             if (parts.length == 1 && parts[0].equals("PED_REQUEST")) {
-                return "VALUE " + pedAlarm;
+                return "VALUE " + pedestrianCallButton.testAndClear();
             }
 
             if (parts.length == 5 && parts[0].equals("SET_TRAFFIC_LIGHT")) {
-                if (activeEmergencyVehicle != null) {
+                if (mode == Mode.EMERGENCY) {
                     return "ERROR emergency vehicle is crossing";
                 }
 
@@ -980,47 +989,46 @@ public class Crosswalk extends Application {
                 Multiplexor.SignalColor color =
                         Multiplexor.SignalColor.valueOf(parts[4]);
 
-                Signal signal = signalByName.get(signalName(direction, lane));
-                if (signal == null) return "ERROR unknown traffic light";
-                signal.setOutput(display, color);
+                if (!trafficLights.setOutput(direction, lane, display, color)) {
+                    return "ERROR unknown traffic light";
+                }
                 return "OK TRAFFIC_LIGHT_SET";
             }
 
             if (parts.length == 2 && parts[0].equals("SET_PED_LIGHT")) {
-                if (activeEmergencyVehicle != null) {
+                if (mode == Mode.EMERGENCY) {
                     return "ERROR emergency vehicle is crossing";
                 }
                 Multiplexor.PedStatus status =
                         Multiplexor.PedStatus.valueOf(parts[1]);
                 if (status == Multiplexor.PedStatus.WALK) {
-                    setPedestrianAlarm(true);
+                    requestPedestrianWalk();
                 } else {
-                    applyNormalPattern();
+                    pedestrianWalkPending = false;
+                    if (pedestrianLights.isWalk()) setPedestrianWalk(false);
                 }
                 return "OK PED_LIGHT " + status;
             }
 
             if (parts.length == 2 && parts[0].equals("EMERGENCY")) {
-                Multiplexor.Direction.valueOf(parts[1]);
-                return "VALUE TRUE";
+                Multiplexor.Direction direction = Multiplexor.Direction.valueOf(parts[1]);
+                return "VALUE " + emergencyVehicleDetector.detect(direction);
             }
 
             if (parts.length == 3 && parts[0].equals("CAR_DETECTION")) {
-                Multiplexor.Direction.valueOf(parts[1]);
-                Multiplexor.Lane.valueOf(parts[2]);
-                return "VALUE TRUE";
+                Multiplexor.Direction direction = Multiplexor.Direction.valueOf(parts[1]);
+                Multiplexor.Lane lane = Multiplexor.Lane.valueOf(parts[2]);
+                return "VALUE " + inductionSensor.detect(direction, lane);
             }
 
             // Commands used only by the interactive JavaFX demonstration.
             if (parts.length == 2 && parts[0].equals("CYCLE_SIGNAL")) {
-                if (activeEmergencyVehicle != null) {
+                if (mode == Mode.EMERGENCY) {
                     return "ERROR emergency vehicle is crossing";
                 }
-                Signal signal = signalByName.get(parts[1]);
-                if (signal == null) {
+                if (!trafficLights.cycle(parts[1])) {
                     return "ERROR unknown signal " + parts[1];
                 }
-                signal.nextLight();
                 return "OK CYCLE_SIGNAL " + parts[1];
             }
 
@@ -1029,148 +1037,28 @@ public class Crosswalk extends Application {
                         Multiplexor.Direction.valueOf(parts[1]);
                 Multiplexor.Direction destination =
                         Multiplexor.Direction.valueOf(parts[2]);
-                allSignalsRed();
-                animateEmergencyVehicle(approach, destination);
+                Multiplexor.Lane lane = laneFor(approach, destination);
+
+                if (mode != Mode.EMERGENCY) modeBeforeEmergency = mode;
+                enterMode(Mode.EMERGENCY);
+                // The emergency vehicle's own lane also goes green, so any
+                // ordinary traffic already in it can follow through too.
+                trafficLights.setLaneGreen(approach, lane);
+                emergencyVehicleDetector.setActiveApproach(approach);
+                animateEmergencyVehicle(approach, lane);
                 return "OK EMERGENCY_DETECTED " + parts[1] + " " + parts[2];
             }
 
             if (parts.length == 1 && parts[0].equals("POWER_FAILURE")) {
                 stopEmergencyVehicle();
-                running = false;
-                setPedestrianAlarm(false);
-                allSignalsRed();
+                powerSensor.trip(trafficLights);
+                enterMode(Mode.NO_POWER);
                 return "OK FAILSAFE";
             }
 
             return "ERROR invalid command";
         } catch (IllegalArgumentException e) {
             return "ERROR invalid command value";
-        }
-    }
-
-    /** Converts a direction and short lane enum into the registered GUI name. */
-    private String signalName(Multiplexor.Direction direction,
-                              Multiplexor.Lane lane) {
-        String laneName = switch (lane) {
-            case L -> "LEFT";
-            case R -> "RIGHT";
-            case C -> "STRAIGHT";
-        };
-        return direction + "_" + laneName;
-    }
-
-    // Small signal state machine used when a user clicks an individual light.
-    private enum Light {
-        GREEN, YELLOW, RED;
-
-        Light next() {
-            // Enum order makes the cycle GREEN -> YELLOW -> RED -> GREEN.
-            return values()[(ordinal() + 1) % values().length];
-        }
-
-        Color color() {
-            return switch (this) {
-                case GREEN  -> Crosswalk.GREEN;
-                case YELLOW -> Crosswalk.YELLOW;
-                case RED    -> Crosswalk.RED;
-            };
-        }
-    }
-
-    // Stores and paints the current state of one programmable signal.
-    private static final class Signal {
-        private Light light;
-        private final Shape shape;
-
-        Signal(Shape shape, Light initial) {
-            this.shape = shape;
-            this.light = initial;
-            this.shape.setStroke(Color.web("#00000055"));
-            this.shape.setStrokeWidth(1.5);
-            paint();
-        }
-
-        /** Updates the JavaFX shape to match the stored logical color. */
-        private void paint() {
-            shape.setFill(light.color());
-        }
-
-        /** Failsafe operation used for crossings, emergencies, and power loss. */
-        void forceRed() {
-            light = Light.RED;
-            shape.setOpacity(1.0);
-            paint();
-        }
-
-        /** Sets one signal color directly and ensures it is visible. */
-        void setLight(Light newLight) {
-            light = newLight;
-            shape.setOpacity(1.0);
-            paint();
-        }
-
-        /** Applies a command received through the agreed traffic-light API. */
-        void setOutput(Multiplexor.Display display,
-                       Multiplexor.SignalColor color) {
-            // Lane choice determines the existing shape; OFF dims that shape.
-            if (display == Multiplexor.Display.OFF) {
-                shape.setOpacity(0.15);
-                return;
-            }
-            shape.setOpacity(1.0);
-            setLight(Light.valueOf(color.name()));
-        }
-
-        /** Cycles this signal when its shape is clicked in the simulation. */
-        void nextLight() {
-            light = light.next();
-            shape.setOpacity(1.0);
-            paint();
-        }
-
-        boolean isGreen() {
-            // Cars call this method before crossing their stop line.
-            return light == Light.GREEN;
-        }
-
-        void bringToFront() {
-            shape.toFront();
-        }
-    }
-
-    // Stores the shapes that form one pedestrian sign and recolors them as a group.
-    private static final class PedZone {
-        private final Color normalFill;
-        private final Color normalStroke;
-        private final Shape[] parts;
-
-        PedZone(Color normalFill, Color normalStroke, Shape... parts) {
-            this.normalFill = normalFill;
-            this.normalStroke = normalStroke;
-            this.parts = parts;
-        }
-
-        /** Shows the active crossing state in orange. */
-        void alarm() {
-            for (Shape s : parts) {
-                s.setStroke(ORANGE);
-                if (s instanceof Rectangle r) {
-                    // Keep the center island opaque even while its alarm is on.
-                    r.setFill(normalFill.equals(Color.TRANSPARENT)
-                              ? Color.web("#ff8c1a33")
-                              : Color.web("#5a2a00"));
-                }
-            }
-        }
-
-        /** Restores the normal white pedestrian sign. */
-        void clear() {
-            for (Shape s : parts) {
-                s.setStroke(normalStroke);
-                if (s instanceof Rectangle r) {
-                    r.setFill(normalFill);
-                }
-            }
         }
     }
 
