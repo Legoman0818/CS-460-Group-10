@@ -1,11 +1,7 @@
 /**
- * Power Sensor device.
- *
- * Unlike the other devices, its failsafe path bypasses Cross Walk's normal
- * command dispatch and reaches Traffic Lights directly, the way a real
- * power-loss circuit forces signals dark without waiting on the controller.
- * Controller only learns about the outcome afterward, through the ordinary
- * POWER_FAILURE / RESET protocol commands.
+ * Power Sensor device. When the power fails it makes every traffic light
+ * blink red by itself, without going through the Controller. The Controller
+ * finds out by checking POWER.
  */
 public class PowerSensor {
 
@@ -15,14 +11,15 @@ public class PowerSensor {
         return on;
     }
 
-    /** Trips the failsafe: goes dark and forces every traffic light red. */
+    /** Power failure: go to the failsafe (red lights blinking). */
     public void trip(TrafficLights trafficLights) {
         on = false;
-        trafficLights.allRed();
+        trafficLights.startBlinkingRed();
     }
 
-    /** Restores power after a reset. */
-    public void restore() {
+    /** Power is back (after Reset). */
+    public void restore(TrafficLights trafficLights) {
         on = true;
+        trafficLights.stopBlinking();
     }
 }

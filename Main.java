@@ -1,16 +1,22 @@
 import javafx.application.Application;
 
 /**
- * Entry point for the Traffic Control System program.
- *
- * This class intentionally stays small. JavaFX creates the window and runs
- * its event loop inside Crosswalk, so Main only tells JavaFX which Application
- * class should be launched.
+ * Starts the program. First the digital twin window (Crosswalk) is opened,
+ * then the Controller is created and run() is called.
  */
 public class Main {
 
-    /** Starts JavaFX and forwards any command-line arguments to Crosswalk. */
-    public static void main(String[] args) {
-        Application.launch(Crosswalk.class, args);
+    public static void main(String[] args) throws InterruptedException {
+        // launch() doesn't return until the window closes, so the window gets
+        // its own thread and the controller runs on the main thread.
+        Thread twin = new Thread(
+                () -> Application.launch(Crosswalk.class, args), "digital-twin");
+        twin.start();
+
+        // wait for the twin's server to be ready before connecting to it
+        Crosswalk.awaitReady();
+
+        Controller controller = new Controller("localhost", Crosswalk.PORT);
+        controller.run();
     }
 }

@@ -5,28 +5,22 @@ import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
 
 /**
- * Represents one car in the traffic simulation.
- *
- * PRESENTATION GUIDE
- * ------------------
- * The route is a list of x/y waypoints supplied by Crosswalk.java.
- * Waypoint 0 is the spawn point and waypoint 1 is always the stop line.
- * update() moves the car toward the next waypoint once per JavaFX frame.
- * reset() sends the car back to its spawn point after it finishes the route.
+ * One car in the simulation. It drives along a list of x/y points (its route).
+ * Point 0 is where it starts and point 1 is the stop line. It waits at the
+ * stop line until its light is green. At the end of the route it starts over.
  */
 public class Car extends Group {
 
-    private static final double SPEED = 90; // movement in pixels per second
+    private static final double SPEED = 90; // pixels per second
 
-    private final double[][] route; // ordered {x, y} waypoints
-    private final BooleanSupplier hasGreenLight; // reads this lane's live signal
+    private final double[][] route;              // list of {x, y} points
+    private final BooleanSupplier hasGreenLight; // checks this lane's light
 
-    private double x; // current position on the intersection pane
+    private double x;
     private double y;
-    private int targetWaypoint; // waypoint the car is moving toward
-    private boolean enteredIntersection; // once true, the car must finish safely
+    private int targetWaypoint;          // the point the car is driving to
+    private boolean enteredIntersection; // once it's in, it keeps going
 
-    /** Builds a colored car and assigns its route and traffic-light sensor. */
     public Car(double[][] route, Color color, BooleanSupplier hasGreenLight) {
         if (route == null || route.length < 3) {
             throw new IllegalArgumentException("A car route needs at least 3 waypoints");
@@ -35,7 +29,6 @@ public class Car extends Group {
         this.route = route;
         this.hasGreenLight = hasGreenLight;
 
-        // The visible car is built from a rounded body and a windshield.
         Rectangle body = new Rectangle(0, 0, 30, 52);
         body.setArcWidth(10);
         body.setArcHeight(10);
@@ -52,17 +45,15 @@ public class Car extends Group {
         reset();
     }
 
-    /** Called by Crosswalk's AnimationTimer for every visible frame. */
+    /** Called every frame. seconds is the time since the last frame. */
     public void update(double seconds) {
-        /*
-         * THIS IS THE TRAFFIC-LIGHT RULE:
-         * Waypoint 1 is the stop line. Red and yellow make the car wait there.
-         * Once green lets it enter, later color changes do not trap it inside.
-         */
+        // At the stop line: wait if the light isn't green.
         if (targetWaypoint == 1 && atTarget() && !hasGreenLight.getAsBoolean()) {
             return;
         }
 
+        // At the stop line and green: go into the intersection. After this the
+        // car doesn't stop even if the light changes.
         if (targetWaypoint == 1 && atTarget() && hasGreenLight.getAsBoolean()) {
             enteredIntersection = true;
             targetWaypoint++;
@@ -77,12 +68,12 @@ public class Car extends Group {
         moveTowardTarget(SPEED * seconds);
 
         if (atTarget()) {
-            // Snap onto the point so tiny decimal errors do not build up.
+            // snap exactly onto the point so small errors don't add up
             x = route[targetWaypoint][0];
             y = route[targetWaypoint][1];
             updatePosition();
 
-            // Stop at waypoint 1 until green; pass all later waypoints normally.
+            // don't go past the stop line here, the check at the top handles it
             if (targetWaypoint != 1 || enteredIntersection) {
                 targetWaypoint++;
                 if (targetWaypoint >= route.length) {
@@ -94,57 +85,48 @@ public class Car extends Group {
         }
     }
 
-    /**
-     * True while this car is stopped at its lane's stop line waiting for
-     * green, the same condition a real induction loop embedded in the
-     * pavement there would sense as a vehicle sitting on top of it.
-     */
+    /** True if the car is stopped at the stop line (used by the Induction Sensor). */
     public boolean isWaitingAtStopLine() {
         return targetWaypoint == 1 && !enteredIntersection && atTarget();
     }
 
-    /** Moves a safe distance toward the target using vector direction math. */
     private void moveTowardTarget(double distance) {
-        double targetX = route[targetWaypoint][0];
-        double targetY = route[targetWaypoint][1];
-        double dx = targetX - x;
-        double dy = targetY - y;
+        double dx = route[targetWaypoint][0] - x;
+        double dy = route[targetWaypoint][1] - y;
         double remaining = Math.hypot(dx, dy);
 
         if (remaining == 0) return;
 
-        // Math.min prevents a large frame from moving beyond the waypoint.
+        // don't move past the point
         double amount = Math.min(distance, remaining);
         x += dx / remaining * amount;
         y += dy / remaining * amount;
         updatePosition();
     }
 
-    /** Uses a small tolerance because animation positions are decimal values. */
     private boolean atTarget() {
         if (targetWaypoint >= route.length) return true;
         return Math.hypot(route[targetWaypoint][0] - x,
                           route[targetWaypoint][1] - y) < 0.01;
     }
 
-    /** Rotates the car whenever its route changes direction. */
+    /** Turns the car to face the point it's driving to. */
     private void faceNextWaypoint() {
         if (targetWaypoint >= route.length) return;
 
         double dx = route[targetWaypoint][0] - x;
         double dy = route[targetWaypoint][1] - y;
 
-        // The car drawing naturally points down, so subtract 90 degrees.
+        // the car picture points down, so subtract 90 degrees
         setRotate(Math.toDegrees(Math.atan2(dy, dx)) - 90);
     }
 
-    /** Copies the logical x/y position into the JavaFX Group. */
     private void updatePosition() {
         setLayoutX(x);
         setLayoutY(y);
     }
 
-    /** Sends the car back to its spawn point so traffic continues looping. */
+    /** Puts the car back at the start of its route. */
     private void reset() {
         x = route[0][0];
         y = route[0][1];

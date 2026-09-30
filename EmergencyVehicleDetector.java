@@ -7,21 +7,17 @@ import javafx.scene.text.Font;
 import javafx.scene.text.Text;
 
 /**
- * Emergency Vehicle Detector device (the roadside antenna).
- *
- * Cross Walk tells this class which approach currently has priority when it
- * starts routing an emergency vehicle; an EMERGENCY query reports true only
- * for that direction, the way a real RF or strobe detector only "sees" the
- * vehicle currently in front of it rather than every direction at once.
+ * Emergency Vehicle Detector device (the antenna). It only detects the
+ * direction an emergency vehicle is currently coming from.
  */
 public class EmergencyVehicleDetector {
 
     private static final Color PAINT = Color.web("#f0f0f0");
     private static final Color RED   = Color.web("#cf1d1d");
 
-    private Multiplexor.Direction activeApproach;
+    private Multiplexor.Direction activeApproach; // null when there is no vehicle
 
-    /** Draws the antenna symbol at its fixed position on the intersection. */
+    /** Draws the antenna on the intersection. */
     public EmergencyVehicleDetector(Pane root) {
         Line pole = new Line(823, 178, 823, 197);
         pole.setStroke(PAINT);
@@ -40,17 +36,17 @@ public class EmergencyVehicleDetector {
         root.getChildren().addAll(pole, label, knob);
     }
 
-    /** Records which approach an emergency vehicle is currently using. */
+    /** Called when an emergency vehicle starts its route. */
     public void setActiveApproach(Multiplexor.Direction approach) {
         activeApproach = approach;
     }
 
-    /** Called once the emergency vehicle has finished its route. */
+    /** Called when the emergency vehicle has left. */
     public void clearActiveApproach() {
         activeApproach = null;
     }
 
-    /** True only for the direction currently carrying an emergency vehicle. */
+    /** True if an emergency vehicle is coming from this direction. */
     public boolean detect(Multiplexor.Direction direction) {
         return direction == activeApproach;
     }

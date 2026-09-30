@@ -5,29 +5,25 @@ import javafx.scene.shape.Circle;
 import javafx.scene.shape.Rectangle;
 
 /**
- * Animated emergency vehicle used by the JavaFX digital twin.
- *
- * Crosswalk supplies an ordered list of x/y waypoints. The vehicle moves
- * toward one waypoint at a time and rotates whenever the next segment changes
- * direction. The turning routes therefore appear as clear 90-degree turns.
+ * The emergency vehicle animation. It drives along a list of x/y points and
+ * doesn't stop for lights. When it gets to the end it calls onFinished.
  */
 public class EmergencyVehicle extends Group {
-    // Movement is measured in JavaFX pixels per second.
-    private static final double SPEED = 190.0;
 
-    private final double[][] route; // ordered {x, y} waypoints
-    private final Runnable onFinished; // tells Crosswalk the route has ended
-    private AnimationTimer animation; // calls move() once per visible frame
-    private int target = 1; // route[0] is the spawn point; route[1] is first goal
-    private double x; // current center position
+    private static final double SPEED = 190.0; // pixels per second
+
+    private final double[][] route;    // list of {x, y} points
+    private final Runnable onFinished;
+    private AnimationTimer animation;
+    private int target = 1;            // point 0 is the start, so drive to point 1 first
+    private double x;
     private double y;
 
-    /** Builds the vehicle image and places it at the first route point. */
     public EmergencyVehicle(double[][] route, Runnable onFinished) {
         this.route = route;
         this.onFinished = onFinished;
 
-        // Coordinates are centered around (0,0), which makes rotation natural.
+        // drawn around (0,0) so it rotates around its center
         Rectangle body = new Rectangle(-18, -30, 36, 60);
         body.setArcWidth(10);
         body.setArcHeight(10);
@@ -40,7 +36,6 @@ public class EmergencyVehicle extends Group {
         windshield.setArcHeight(5);
         windshield.setFill(Color.web("#9bd7ff"));
 
-        // The roof lights are static markers; they do not flash.
         Rectangle stripe = new Rectangle(-18, 4, 36, 9);
         stripe.setFill(Color.web("#dc2626"));
         Circle redLight = new Circle(-7, -3, 5, Color.RED);
@@ -53,7 +48,7 @@ public class EmergencyVehicle extends Group {
         faceTarget();
     }
 
-    /** Starts frame-by-frame movement along the route. */
+    /** Starts moving. */
     public void play() {
         animation = new AnimationTimer() {
             private long previous;
@@ -64,8 +59,7 @@ public class EmergencyVehicle extends Group {
                     previous = now;
                     return;
                 }
-                // AnimationTimer gives nanoseconds; convert them to seconds.
-                double seconds = (now - previous) / 1_000_000_000.0;
+                double seconds = (now - previous) / 1_000_000_000.0; // ns to seconds
                 previous = now;
                 move(SPEED * seconds);
             }
@@ -73,12 +67,10 @@ public class EmergencyVehicle extends Group {
         animation.start();
     }
 
-    /** Stops future animation frames without removing the vehicle node. */
     public void stop() {
         if (animation != null) animation.stop();
     }
 
-    /** Moves toward the current target without overshooting the waypoint. */
     private void move(double distance) {
         if (target >= route.length) {
             finish();
@@ -89,7 +81,7 @@ public class EmergencyVehicle extends Group {
         double remaining = Math.hypot(dx, dy);
 
         if (remaining <= distance) {
-            // Snap exactly onto the waypoint before selecting the next segment.
+            // reached the point, go to the next one
             x = route[target][0];
             y = route[target][1];
             target++;
@@ -104,21 +96,19 @@ public class EmergencyVehicle extends Group {
         updatePosition();
     }
 
-    /** Rotates the vehicle so its front points toward the next waypoint. */
+    /** Turns the vehicle to face the next point. */
     private void faceTarget() {
         double dx = route[target][0] - x;
         double dy = route[target][1] - y;
-        // The drawing faces upward at 0 degrees, so subtract 90 degrees.
+        // the picture points up, so subtract 90 degrees
         setRotate(Math.toDegrees(Math.atan2(dy, dx)) - 90);
     }
 
-    /** Copies the route coordinates into the JavaFX node position. */
     private void updatePosition() {
         setLayoutX(x);
         setLayoutY(y);
     }
 
-    /** Stops movement and lets Crosswalk restore normal traffic operation. */
     private void finish() {
         stop();
         onFinished.run();
