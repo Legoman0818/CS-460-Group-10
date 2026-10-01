@@ -12,59 +12,60 @@ import javafx.scene.shape.Shape;
 import javafx.scene.shape.StrokeLineCap;
 
 /**
- * Pedestrian Call Button and Pedestrian Lights devices.
+ * Pedestrian - the call button and the walk lights. (Walkthrough 3.7)
  *
- * Lights: 5 stick figure signs (4 corners and the middle). They all show
- * WALK (orange) or STOP (white) together.
+ * Design Diagram: the Pedestrian box, which covers both the Pedestrian Call
+ * Button and the Pedestrian Lights.
  *
- * Button: clicking a corner sign presses the button. The press is saved until
- * the Controller clears it with PED_CLEAR_REQUEST.
+ * API: PED_REQUEST calls isRequested(), PED_CLEAR_REQUEST calls
+ * clearRequest(), and SET_PED_LIGHT calls setWalkLight().
+ *
+ * Lights: 5 stick figure signs (the 4 corners and the middle). They all
+ * show WALK (orange) or STOP (white) at the same time.
+ * Button: clicking a corner sign presses the button.
  */
 public class Pedestrian {
 
     private static final Color PAINT  = Color.web("#f0f0f0");
     private static final Color ORANGE = Color.web("#ff8c1a");
 
-    private final Color roadBackground;
     private final List<PedSign> signs = new ArrayList<>();
-    private boolean requested = false;
+    private boolean requested = false; // true once someone presses the button
 
     /** onCornerPressed runs when a corner sign is clicked (after the press is saved). */
-    public Pedestrian(Pane root, Color roadBackground, Runnable onCornerPressed) {
-        this.roadBackground = roadBackground;
-        Runnable onPressed = () -> {
-            press();
-            onCornerPressed.run();
-        };
-        sign(root, 250, 198, false, onPressed); // north-west corner
-        sign(root, 783, 210, false, onPressed); // north-east corner
-        sign(root, 250, 765, false, onPressed); // south-west corner
-        sign(root, 785, 765, false, onPressed); // south-east corner
-        // the middle one has no button and a solid background so the
+    public Pedestrian(Pane root, Runnable onCornerPressed) {
+        sign(root, 250, 198, false, onCornerPressed); // north-west corner
+        sign(root, 783, 210, false, onCornerPressed); // north-east corner
+        sign(root, 250, 765, false, onCornerPressed); // south-west corner
+        sign(root, 785, 765, false, onCornerPressed); // south-east corner
+        // the middle one has no button, and a solid background so the
         // diagonal crosswalk lines don't show through it
         sign(root, 514, 480, true, null);
     }
 
-    // ---------------- button ----------------
+    // ---------------- Button ----------------
+    // A press stays saved until the Controller clears it, so it never gets
+    // lost, even if an emergency happens in between.
 
     public void press() {
         requested = true;
     }
 
+    /** PED_REQUEST */
     public boolean isRequested() {
         return requested;
     }
 
-    /** Clears the press. Returns true if there was one. */
+    /** PED_CLEAR_REQUEST: clears the press. True if there was one. */
     public boolean clearRequest() {
         boolean wasRequested = requested;
         requested = false;
         return wasRequested;
     }
 
-    // ---------------- lights ----------------
+    // ---------------- Lights ----------------
 
-    /** true = WALK, false = STOP */
+    /** SET_PED_LIGHT: true = WALK (orange), false = STOP (white). */
     public void setWalkLight(boolean walk) {
         for (PedSign sign : signs) {
             if (walk) sign.walk();
@@ -72,20 +73,23 @@ public class Pedestrian {
         }
     }
 
-    /** Draws one sign: a box with a stick figure in it. */
+    /** Draws one sign: a box with a stick figure in it. Corner signs are the buttons. */
     private void sign(Pane root, double cx, double cy, boolean middle, Runnable onPressed) {
         double half = 26;
         Rectangle box = new Rectangle(cx - half, cy - half, half * 2, half * 2);
-        Color normalFill = middle ? roadBackground : Color.TRANSPARENT;
-        box.setFill(normalFill);
+        box.setFill(middle ? Roads.BG : Color.TRANSPARENT);
         box.setStroke(PAINT);
         box.setStrokeWidth(2);
         box.setPickOnBounds(true);
         if (onPressed != null) {
             box.setCursor(Cursor.HAND);
-            box.setOnMouseClicked(e -> onPressed.run());
+            box.setOnMouseClicked(e -> {
+                press();
+                onPressed.run();
+            });
         }
 
+        // the stick figure
         Circle head = new Circle(cx, cy - 11, 6);
         head.setStroke(PAINT);
         head.setStrokeWidth(2);
@@ -96,10 +100,10 @@ public class Pedestrian {
         Line legR = line(cx, cy + 6, cx + 7, cy + 17);
 
         Group g = new Group(box, head, body, arms, legL, legR);
-        signs.add(new PedSign(normalFill, box, head, body, arms, legL, legR));
+        signs.add(new PedSign(box, middle, new Shape[] {box, head, body, arms, legL, legR}));
         root.getChildren().add(g);
         if (middle) {
-            g.toFront(); // so cars and road lines can't cover it
+            g.toFront(); // so the cars and road lines can't cover it
         }
     }
 
@@ -111,37 +115,31 @@ public class Pedestrian {
         return l;
     }
 
-    /** The shapes that make up one sign, so they can be recolored together. */
+    /** The shapes that make up one sign, so we can recolor them all together. */
     private static final class PedSign {
-        private final Color normalFill;
-        private final Shape[] parts;
+        private final Rectangle box;
+        private final boolean middle;
+        private final Shape[] parts; // the box and the stick figure
 
-        PedSign(Color normalFill, Shape... parts) {
-            this.normalFill = normalFill;
+        PedSign(Rectangle box, boolean middle, Shape[] parts) {
+            this.box = box;
+            this.middle = middle;
             this.parts = parts;
         }
 
         /** WALK: orange */
         void walk() {
-            for (Shape s : parts) {
-                s.setStroke(ORANGE);
-                if (s instanceof Rectangle box) {
-                    // the middle sign stays solid so the crosswalk lines stay hidden
-                    box.setFill(normalFill.equals(Color.TRANSPARENT)
-                            ? Color.web("#ff8c1a33")
-                            : Color.web("#5a2a00"));
-                }
-            }
+            for (Shape s : parts) s.setStroke(ORANGE);
+            // the middle sign stays solid so the crosswalk lines stay hidden
+            if (middle) box.setFill(Color.web("#5a2a00"));
+            else box.setFill(Color.web("#ff8c1a33"));
         }
 
         /** STOP: back to white */
         void stop() {
-            for (Shape s : parts) {
-                s.setStroke(PAINT);
-                if (s instanceof Rectangle box) {
-                    box.setFill(normalFill);
-                }
-            }
+            for (Shape s : parts) s.setStroke(PAINT);
+            if (middle) box.setFill(Roads.BG);
+            else box.setFill(Color.TRANSPARENT);
         }
     }
 }

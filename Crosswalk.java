@@ -9,52 +9,55 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.beans.binding.Bindings;
+import javafx.geometry.Rectangle2D;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
-import javafx.scene.Group;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.stage.Screen;
 import javafx.stage.Stage;
 
 /**
- * The digital twin. This is the fake intersection that the Controller runs.
+ * Crosswalk - the Digital Twin, our fake intersection. (Walkthrough 3.5)
  *
- * It doesn't make any traffic decisions. It:
- *  - draws the intersection and holds all the devices
- *  - runs a server that answers the Multiplexor's commands
- *  - has a side panel to make things happen (press the button, send an
- *    emergency vehicle, power failure, etc.)
- *  - moves the cars
+ * Design Diagram: not drawn as a box. It holds all the device boxes at the
+ * bottom of the diagram (Traffic Lights, Pedestrian, Induction Sensor,
+ * Emergency Vehicle Detector).
  *
- * Main starts this window and then runs the Controller.
+ * API: this is the twin's side of the API. executeCommand() answers every
+ * command the Multiplexor sends.
+ *
+ * It does NOT make any traffic decisions, the Controller does that. It has 4 jobs:
+ *   Job 1: build the intersection and the window   (start)
+ *   Job 2: move the cars                           (addCars)
+ *   Job 3: the side panel                          (createPanel and the panel actions)
+ *   Job 4: the server that answers the Multiplexor (startServer ... executeCommand)
  */
 public class Crosswalk extends Application {
 
-    static final int PORT = 5000;
+    static final int PORT = 5000; // the Multiplexor connects to this
 
-    // Lets Main wait until the server is running before the Controller connects.
-    private static final CountDownLatch READY = new CountDownLatch(1);
-
-    // everything on the intersection is drawn on this
+    // the intersection picture, everything on the road gets drawn on this
     private final Pane root = new Pane();
 
-    // devices
+    // the devices (the boxes at the bottom of the Design Diagram, plus the timer and power sensor)
     private TrafficLights trafficLights;
     private Pedestrian pedestrian;
     private InductionSensor inductionSensor;
@@ -66,23 +69,22 @@ public class Crosswalk extends Application {
     private final Map<String, Car> carsByLane = new HashMap<>();
     private EmergencyVehicle activeEmergencyVehicle;
 
-    // server
+    // the server (Job 4)
     private ServerSocket serverSocket;
-    private volatile boolean serverRunning;
-    private final List<Socket> clients = new CopyOnWriteArrayList<>();
+    private Socket client; // the Controller's connection
 
-    // panel things that get updated from more than one place
+    // panel labels/buttons that get changed from more than one place
     private Label status;
     private Label modeValue;
     private Button dayNight;
 
-    /** Main calls this to wait until the twin is ready. */
-    static void awaitReady() throws InterruptedException {
-        if (!READY.await(30, TimeUnit.SECONDS)) {
-            throw new IllegalStateException("Digital twin did not start");
-        }
-    }
+    // ---------------- Job 1: build the intersection ----------------
 
+    /**
+     * JavaFX calls this when the window opens. Draws the roads, makes each
+     * device, adds the cars, builds the side panel, shows the window and
+     * starts the server.
+     */
     @Override
     public void start(Stage stage) {
         root.setPrefSize(Roads.W, Roads.H);
@@ -91,59 +93,74 @@ public class Crosswalk extends Application {
         emergencyVehicleDetector = new EmergencyVehicleDetector(root);
         trafficLights = new TrafficLights(root, this::manualSignalChange);
 
-        // cars go on top of the road but under the lights
+        // the order matters: cars go on top of the road but under the lights
         addCars();
         inductionSensor = new InductionSensor(carsByLane);
 
-        pedestrian = new Pedestrian(root, Roads.BG,
-                () -> showStatus("Pedestrian crossing requested"));
+        pedestrian = new Pedestrian(root, () -> showStatus("Pedestrian crossing requested"));
         trafficLights.bringAllToFront();
 
-        // Only the intersection scales when the window is resized,
-        // the panel on the right stays the same size.
-        Group content = new Group(root);
-        Pane frame = new Pane(content);
+        // Resizing: only the intersection zooms when the window is resized,
+        // the panel on the right stays the same size. The zoom is whichever
+        // of width/height runs out first, so the whole intersection always
+        // fits and never gets stretched.
+        root.setMinSize(Roads.W, Roads.H); // the picture itself never changes size,
+        root.setMaxSize(Roads.W, Roads.H); // it only zooms
+        StackPane frame = new StackPane(root); // StackPane keeps it centered
+        frame.setMinSize(0, 0); // lets the window get smaller than the full size picture
         frame.setStyle("-fx-background-color: #0d0d0d;");
-        content.scaleXProperty().bind(
-                javafx.beans.binding.Bindings.createDoubleBinding(
-                        () -> Math.min(frame.getWidth() / Roads.W, frame.getHeight() / Roads.H),
-                        frame.widthProperty(), frame.heightProperty()));
-        content.scaleYProperty().bind(content.scaleXProperty());
+        root.scaleXProperty().bind(Bindings.createDoubleBinding(
+                () -> Math.min(frame.getWidth() / Roads.W, frame.getHeight() / Roads.H),
+                frame.widthProperty(), frame.heightProperty()));
+        root.scaleYProperty().bind(root.scaleXProperty());
+
+        // the panel scrolls if the window is too short to show all of it (it's about 800 px tall)
+        ScrollPane panelScroll = new ScrollPane(createPanel());
+        panelScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        panelScroll.setStyle("-fx-background: #111827; -fx-background-color: #111827; -fx-padding: 0;");
 
         BorderPane window = new BorderPane();
         window.setCenter(frame);
-        window.setRight(createPanel());
+        window.setRight(panelScroll);
+
+        // Start at full size, or smaller if the screen isn't big enough.
+        // 40 is left for the window's title bar.
+        Rectangle2D screen = Screen.getPrimary().getVisualBounds();
+        double width = Math.min(Roads.W + 290, screen.getWidth());
+        double height = Math.min(Roads.H, screen.getHeight() - 40);
 
         stage.setTitle("Crosswalk - Traffic Control System (Group 10)");
-        stage.setScene(new Scene(window, Roads.W + 290, Roads.H, Roads.BG));
+        stage.setScene(new Scene(window, width, height, Roads.BG));
         stage.show();
 
         startServer();
-        READY.countDown();
     }
 
-    /** Called when the window closes. */
+    /** JavaFX calls this when the window closes. */
     @Override
     public void stop() {
-        closeServer(); // this also makes Controller.run() end
+        closeServer(); // closing the connection is also what makes Controller.run() stop
     }
 
-    // ---------------- cars ----------------
+    // ---------------- Job 2: move the cars ----------------
 
-    /** Makes one car for each lane and starts moving them. */
+    /**
+     * Makes one Car for every route in Roads.ROUTES and keeps them in
+     * carsByLane (the Induction Sensor looks cars up in there). Then starts
+     * a timer that moves every car each frame.
+     */
     private void addCars() {
         List<Car> cars = new ArrayList<>();
         for (Map.Entry<String, double[][]> entry : Roads.ROUTES.entrySet()) {
             String lane = entry.getKey();
             String direction = lane.substring(0, lane.indexOf('_'));
-            Car car = new Car(entry.getValue(), carColor(direction),
-                    () -> trafficLights.isGreen(lane));
+            Car car = new Car(entry.getValue(), carColor(direction), trafficLights, lane);
             carsByLane.put(lane, car);
             cars.add(car);
         }
         root.getChildren().addAll(cars);
 
-        // runs every frame
+        // AnimationTimer runs handle() every frame, about 60 times a second
         new AnimationTimer() {
             private long previousTime;
 
@@ -153,7 +170,7 @@ public class Crosswalk extends Application {
                     previousTime = now;
                     return;
                 }
-                double seconds = (now - previousTime) / 1_000_000_000.0; // ns to seconds
+                double seconds = (now - previousTime) / 1_000_000_000.0; // now is in nanoseconds, so change it to seconds
                 previousTime = now;
                 for (Car car : cars) {
                     car.update(seconds);
@@ -172,8 +189,9 @@ public class Crosswalk extends Application {
         };
     }
 
-    // ---------------- side panel ----------------
+    // ---------------- Job 3: the side panel ----------------
 
+    /** Builds the buttons on the right. What each button does is in the panel actions below. */
     private VBox createPanel() {
         Label title = new Label("TRAFFIC CONTROL");
         title.setStyle("-fx-text-fill: white; -fx-font-size: 18px; -fx-font-weight: bold;");
@@ -187,7 +205,7 @@ public class Crosswalk extends Application {
         status.setStyle("-fx-text-fill: #a7f3d0; -fx-background-color: #12372f; "
                 + "-fx-background-radius: 8px; -fx-font-size: 12px;");
 
-        // system buttons
+        // SYSTEM card: Reset, Power Off, Request Crossing
         Button reset = button("Reset System", "#334155");
         reset.setOnAction(e -> resetSystem());
         Button powerOff = button("Power Off", "#7f1d1d");
@@ -196,7 +214,7 @@ public class Crosswalk extends Application {
         requestCrossing.setOnAction(e -> requestCrossing());
         VBox systemCard = card(sectionLabel("SYSTEM"), reset, powerOff, requestCrossing);
 
-        // emergency vehicle
+        // EMERGENCY VEHICLE card: pick where it comes from and where it goes
         ComboBox<Multiplexor.Direction> from = new ComboBox<>();
         from.getItems().addAll(Multiplexor.Direction.values());
         from.setValue(Multiplexor.Direction.NORTH);
@@ -212,7 +230,7 @@ public class Crosswalk extends Application {
         sendEmergency.setOnAction(e -> sendEmergencyVehicle(from.getValue(), to.getValue()));
         VBox emergencyCard = card(sectionLabel("EMERGENCY VEHICLE"), route, sendEmergency);
 
-        // day/night
+        // DAY/NIGHT TIMER card
         modeValue = new Label();
         modeValue.setStyle("-fx-text-fill: #f8fafc; -fx-font-size: 14px; -fx-font-weight: bold;");
         dayNight = button("", "#334155");
@@ -220,7 +238,7 @@ public class Crosswalk extends Application {
         updateModeCard();
         VBox modeCard = card(sectionLabel("DAY/NIGHT TIMER"), modeValue, dayNight);
 
-        // green light time
+        // SIGNAL TIMING card: the day green time (yellow is 1/5 of it)
         TextField intervalField = new TextField(
                 String.valueOf((int) dayNightTimer.getIntervalSeconds()));
         Button applyInterval = button("Apply Interval", "#334155");
@@ -248,6 +266,8 @@ public class Crosswalk extends Application {
         panel.setStyle("-fx-background-color: #111827;");
         return panel;
     }
+
+    // the next few just style the panel so createPanel() isn't so long
 
     private VBox card(Node... children) {
         VBox box = new VBox(10, children);
@@ -280,14 +300,16 @@ public class Crosswalk extends Application {
         return button;
     }
 
-    // ---------------- panel actions ----------------
-    // These only change the devices. They don't call the Controller,
-    // it sees the change the next time it checks the devices.
+    // ---------------- Job 3: panel actions ----------------
+    // These ONLY change the devices. They never call the Controller.
+    // The Controller sees the change the next time it checks (every 100 ms).
 
+    /** Shows a message in the green status box at the top of the panel. */
     private void showStatus(String message) {
         if (status != null) status.setText("●  " + message);
     }
 
+    /** Reset System: no emergency vehicle, no button press, DAY mode, power back on. */
     private void resetSystem() {
         removeEmergencyVehicle();
         pedestrian.clearRequest();
@@ -297,6 +319,7 @@ public class Crosswalk extends Application {
         showStatus("System reset to day mode");
     }
 
+    /** Power Off: the power sensor makes the lights blink red (see PowerSensor.trip). */
     private void powerFailure() {
         removeEmergencyVehicle();
         powerSensor.trip(trafficLights);
@@ -304,6 +327,7 @@ public class Crosswalk extends Application {
         showStatus("Power failure: failsafe active");
     }
 
+    /** Request Crossing: same as clicking one of the corner signs. */
     private void requestCrossing() {
         if (!powerSensor.isOn()) {
             showStatus("Power is off. Reset the system first.");
@@ -313,6 +337,7 @@ public class Crosswalk extends Application {
         showStatus("Pedestrian crossing requested; will WALK at the next signal change");
     }
 
+    /** Send Emergency Vehicle: tells the detector the direction, then starts the ambulance. */
     private void sendEmergencyVehicle(Multiplexor.Direction from, Multiplexor.Direction to) {
         if (!powerSensor.isOn()) {
             showStatus("Power is off. Reset the system first.");
@@ -325,7 +350,7 @@ public class Crosswalk extends Application {
         removeEmergencyVehicle();
         emergencyVehicleDetector.setActiveApproach(from);
 
-        // drive the route of the lane that turns the right way
+        // use the route of the normal car in the lane that turns the right way
         double[][] route = Roads.ROUTES.get(Multiplexor.laneKey(from, Roads.laneFor(from, to)));
         activeEmergencyVehicle = new EmergencyVehicle(route, this::removeEmergencyVehicle);
         root.getChildren().add(activeEmergencyVehicle);
@@ -333,7 +358,10 @@ public class Crosswalk extends Application {
         showStatus("Emergency route: " + from + " to " + to);
     }
 
-    /** Removes the emergency vehicle (if there is one) and clears the detector. */
+    /**
+     * Removes the emergency vehicle (if there is one) and clears the detector.
+     * The ambulance also calls this itself when it drives off the screen.
+     */
     private void removeEmergencyVehicle() {
         if (activeEmergencyVehicle != null) {
             activeEmergencyVehicle.stop();
@@ -343,76 +371,77 @@ public class Crosswalk extends Application {
         emergencyVehicleDetector.clearActiveApproach();
     }
 
+    /** Switch to Night/Day: flips the Day/Night Timer. */
     private void toggleDayNight() {
         dayNightTimer.set(dayNightTimer.isDay() ? Mode.NIGHT : Mode.DAY);
         updateModeCard();
         showStatus("Day/Night Timer set to " + dayNightTimer.get());
     }
 
+    /** Updates the DAY/NIGHT TIMER card's label and button text. */
     private void updateModeCard() {
         modeValue.setText(dayNightTimer.get() + " MODE");
         dayNight.setText(dayNightTimer.isDay() ? "Switch to Night" : "Switch to Day");
     }
 
-    /** Clicking a light changes its color. The Controller changes it back at its next change. */
+    /**
+     * Clicking a traffic light changes its color (just for the demo).
+     * The Controller sets it back the next time it changes the lights.
+     */
     private void manualSignalChange(String name) {
         if (!powerSensor.isOn()) return;
         trafficLights.cycle(name);
         showStatus("Manual signal change: " + name);
     }
 
-    // ---------------- server ----------------
+    // ---------------- Job 4: the server ----------------
 
+    /** Opens port 5000 and starts one background thread to run the server. */
     private void startServer() {
         try {
             serverSocket = new ServerSocket(PORT);
-            serverRunning = true;
         } catch (IOException e) {
             throw new IllegalStateException("Could not open port " + PORT, e);
         }
 
-        // daemon threads so they don't keep the program running after it closes
-        Thread serverThread = new Thread(this::acceptClients, "twin-server");
+        // setDaemon(true) means this thread won't keep the program open after the window closes
+        Thread serverThread = new Thread(this::runServer, "twin-server");
         serverThread.setDaemon(true);
         serverThread.start();
         System.out.println("Digital Twin listening on port " + PORT);
     }
 
-    /** Waits for connections. Each client gets its own thread. */
-    private void acceptClients() {
-        while (serverRunning) {
-            try {
-                Socket client = serverSocket.accept();
-                clients.add(client);
-                Thread clientThread = new Thread(() -> handleClient(client), "twin-client");
-                clientThread.setDaemon(true);
-                clientThread.start();
-            } catch (IOException e) {
-                if (serverRunning) System.err.println("Socket accept error: " + e.getMessage());
+    /** Waits for the Controller to connect, then answers it until it disconnects. Then waits again. */
+    private void runServer() {
+        try {
+            while (true) {
+                client = serverSocket.accept();
+                handleClient(client);
             }
+        } catch (IOException e) {
+            // the window was closed, which closes serverSocket
         }
     }
 
     /** Reads one command per line and sends back one reply per line. */
-    private void handleClient(Socket client) {
-        try (Socket socket = client;
-             BufferedReader input = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-             PrintWriter output = new PrintWriter(socket.getOutputStream(), true)) {
+    private void handleClient(Socket socket) {
+        try {
+            BufferedReader input = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            PrintWriter output = new PrintWriter(socket.getOutputStream(), true);
             String command;
             while ((command = input.readLine()) != null) {
                 output.println(runOnFxThread(command));
             }
+            socket.close();
         } catch (IOException e) {
-            if (serverRunning) System.err.println("Client connection error: " + e.getMessage());
-        } finally {
-            clients.remove(client);
+            // the Controller disconnected
         }
     }
 
     /**
-     * JavaFX only lets you change the screen from its own thread, so the
-     * command is handed to that thread with Platform.runLater and we wait
-     * for the answer.
+     * JavaFX only lets you change the screen from its own thread, and the
+     * server is on a different thread. So we hand the command to the JavaFX
+     * thread with Platform.runLater and wait (up to 2 seconds) for the answer.
      */
     private String runOnFxThread(String command) {
         CompletableFuture<String> reply = new CompletableFuture<>();
@@ -424,28 +453,29 @@ public class Crosswalk extends Application {
         }
     }
 
-    /** Closes the server and all connections. */
+    /** Closes the server and the Controller's connection. */
     private void closeServer() {
-        serverRunning = false;
         try {
             if (serverSocket != null) serverSocket.close();
-            for (Socket client : clients) client.close();
-        } catch (IOException ignored) {
+            if (client != null) client.close();
+        } catch (IOException e) {
             // closing anyway
         }
     }
 
     /**
-     * Handles one command from the Multiplexor. Always returns a reply:
-     * OK, VALUE ..., or ERROR.
+     * The twin's side of the API. Splits the command into words and has one
+     * if for each command, which calls the right device. Always replies with
+     * one line: OK ... for outputs, VALUE ... for inputs, or ERROR.
      */
     private String executeCommand(String command) {
         try {
             String[] parts = command.trim().toUpperCase().split("\\s+");
 
-            // ----- outputs -----
-            // When the power is off the lights stay red, so these do nothing.
+            // ----- outputs (the Controller changing something) -----
+            // While the power is off these are ignored so the lights keep blinking red.
 
+            // SET_TRAFFIC_LIGHT dir lane display color -> Traffic Lights
             if (parts.length == 5 && parts[0].equals("SET_TRAFFIC_LIGHT")) {
                 Multiplexor.Direction direction = Multiplexor.Direction.valueOf(parts[1]);
                 Multiplexor.Lane lane = Multiplexor.Lane.valueOf(parts[2]);
@@ -459,6 +489,7 @@ public class Crosswalk extends Application {
                 return "OK TRAFFIC_LIGHT_SET";
             }
 
+            // SET_PED_LIGHT WALK/STOP -> Pedestrian lights
             if (parts.length == 2 && parts[0].equals("SET_PED_LIGHT")) {
                 Multiplexor.PedStatus pedStatus = Multiplexor.PedStatus.valueOf(parts[1]);
                 if (!powerSensor.isOn()) return "OK NO_POWER";
@@ -466,42 +497,51 @@ public class Crosswalk extends Application {
                 return "OK PED_LIGHT " + pedStatus;
             }
 
-            // ----- inputs -----
+            // ----- inputs (the Controller asking a question) -----
 
+            // PED_REQUEST -> Pedestrian button
             if (parts.length == 1 && parts[0].equals("PED_REQUEST")) {
                 return "VALUE " + pedestrian.isRequested();
             }
 
+            // PED_CLEAR_REQUEST -> Pedestrian button
             if (parts.length == 1 && parts[0].equals("PED_CLEAR_REQUEST")) {
                 return "VALUE " + pedestrian.clearRequest();
             }
 
+            // EMERGENCY dir -> Emergency Vehicle Detector
             if (parts.length == 2 && parts[0].equals("EMERGENCY")) {
                 Multiplexor.Direction direction = Multiplexor.Direction.valueOf(parts[1]);
                 return "VALUE " + emergencyVehicleDetector.detect(direction);
             }
 
+            // CAR_DETECTION dir lane -> Induction Sensor
             if (parts.length == 3 && parts[0].equals("CAR_DETECTION")) {
                 Multiplexor.Direction direction = Multiplexor.Direction.valueOf(parts[1]);
                 Multiplexor.Lane lane = Multiplexor.Lane.valueOf(parts[2]);
                 return "VALUE " + inductionSensor.detect(direction, lane);
             }
 
+            // the extra inputs that only our Controller uses
+
+            // DAY_NIGHT -> Day/Night Timer
             if (parts.length == 1 && parts[0].equals("DAY_NIGHT")) {
                 return "VALUE " + dayNightTimer.get();
             }
 
+            // GREEN_INTERVAL -> Day/Night Timer
             if (parts.length == 1 && parts[0].equals("GREEN_INTERVAL")) {
                 return "VALUE " + dayNightTimer.getIntervalSeconds();
             }
 
+            // POWER -> Power Sensor
             if (parts.length == 1 && parts[0].equals("POWER")) {
                 return "VALUE " + powerSensor.isOn();
             }
 
             return "ERROR invalid command";
         } catch (IllegalArgumentException e) {
-            // valueOf() throws this for a bad direction, lane, color, etc.
+            // valueOf() throws this if the direction, lane, color, etc. is spelled wrong
             return "ERROR invalid command value";
         }
     }

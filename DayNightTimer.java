@@ -1,7 +1,13 @@
 /**
- * Day/Night Timer device. Holds whether it is day or night and how long each
- * green light lasts. In the simulation these are set from the side panel.
- * The Controller reads them with DAY_NIGHT and GREEN_INTERVAL.
+ * DayNightTimer - says if it's day or night. (Walkthrough 3.10)
+ *
+ * Design Diagram: not a box on the diagram yet. It's the input that picks
+ * between the Day and Night boxes.
+ *
+ * API: the extra commands DAY_NIGHT (get) and GREEN_INTERVAL (getIntervalSeconds).
+ *
+ * Holds two values: DAY or NIGHT, and how long a day green lasts. Both get
+ * set from the side panel.
  */
 public class DayNightTimer {
 
@@ -14,6 +20,7 @@ public class DayNightTimer {
         this.mode = mode;
     }
 
+    /** DAY_NIGHT */
     public Mode get() {
         return mode;
     }
@@ -22,6 +29,7 @@ public class DayNightTimer {
         return mode == Mode.DAY;
     }
 
+    /** GREEN_INTERVAL */
     public double getIntervalSeconds() {
         return intervalSeconds;
     }

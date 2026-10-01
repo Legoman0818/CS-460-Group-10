@@ -5,22 +5,28 @@ import java.io.PrintWriter;
 import java.net.Socket;
 
 /**
- * The Multiplexor is how the Controller talks to the intersection.
+ * Multiplexor - how the Controller talks to the intersection. (Walkthrough 3.4)
  *
- * Each method turns into a one line text command that gets sent over a
- * socket to the digital twin (Crosswalk). Then it waits for the one line
- * reply. This way the Controller doesn't have to deal with any networking.
+ * Design Diagram: not drawn as a box. It's the arrows going down from the
+ * Controller to the devices.
+ *
+ * API: this class IS the Controller's side of the API. Every method below
+ * turns into one line of text that gets sent over a socket to the twin
+ * (Crosswalk), and then we wait for the one line reply. That way the
+ * Controller never has to deal with any of the networking.
  */
 public class Multiplexor implements AutoCloseable {
 
-    // Using enums so we can't send a misspelled direction, color, etc.
+    // ---------------- Enums ----------------
+    // The allowed values. Using enums means we can't send a misspelled
+    // direction or color by accident.
     public enum Direction { NORTH, SOUTH, EAST, WEST }
-    public enum Lane { L, R, C }
+    public enum Lane { L, R, C }  // L = left turn, R = right turn, C = straight
     public enum Display { FULL, RIGHT_ARROW, LEFT_ARROW, OFF }
     public enum SignalColor { RED, YELLOW, GREEN }
     public enum PedStatus { WALK, STOP }
 
-    /** Makes the name used to look up a lane's light or car, like "NORTH_LEFT". */
+    /** Makes the name the twin uses to look up a light or a car. NORTH + L gives "NORTH_LEFT". */
     public static String laneKey(Direction direction, Lane lane) {
         String laneName = switch (lane) {
             case L -> "LEFT";
@@ -31,69 +37,91 @@ public class Multiplexor implements AutoCloseable {
     }
 
     private final Socket socket;
-    private final BufferedReader input;   // replies from the twin
-    private final PrintWriter output;     // commands to the twin
+    private final BufferedReader input;   // replies coming back from the twin
+    private final PrintWriter output;     // commands going to the twin
 
-    public Multiplexor(String host, int port) throws IOException {
-        socket = new Socket(host, port);
+    // ---------------- Connecting ----------------
+
+    public Multiplexor(String host, int port) throws IOException, InterruptedException {
+        socket = connect(host, port);
         input = new BufferedReader(new InputStreamReader(socket.getInputStream()));
         output = new PrintWriter(socket.getOutputStream(), true);
     }
 
-    // ---------------- API agreed on with the other groups ----------------
+    /**
+     * The twin's window might still be opening when we get here, so if it
+     * isn't ready we wait a tenth of a second and try again, for up to 30 seconds.
+     */
+    private static Socket connect(String host, int port) throws IOException, InterruptedException {
+        for (int tries = 1; tries < 300; tries++) {
+            try {
+                return new Socket(host, port);
+            } catch (IOException e) {
+                Thread.sleep(100);
+            }
+        }
+        return new Socket(host, port); // last try, if this fails the error goes to the caller
+    }
 
-    /** True if the pedestrian button has been pressed and not cleared yet. */
+    // ---------------- API methods (agreed on with the other groups) ----------------
+    // These are public so another group's Controller can use them the same way.
+
+    /** PED_REQUEST: true if the button was pressed and not cleared yet. */
     public boolean pedRequest() throws IOException {
         return sendBoolean("PED_REQUEST");
     }
 
-    /** Clears the button press. Returns true if there was a press to clear. */
+    /** PED_CLEAR_REQUEST: clears the button press. True if there was one to clear. */
     public boolean pedClearRequest() throws IOException {
         return sendBoolean("PED_CLEAR_REQUEST");
     }
 
-    /** Sets one lane's traffic light. */
+    /** SET_TRAFFIC_LIGHT: sets one lane's traffic light. */
     public void setTrafficLight(Direction direction, Lane lane,
                                 Display display, SignalColor color) throws IOException {
         send("SET_TRAFFIC_LIGHT " + direction + " " + lane + " " + display + " " + color);
     }
 
-    /** Sets all the pedestrian lights to WALK or STOP. */
+    /** SET_PED_LIGHT: sets all the walk lights to WALK or STOP. */
     public void setPedLight(PedStatus status) throws IOException {
         send("SET_PED_LIGHT " + status);
     }
 
-    /** True if an emergency vehicle is coming from this direction. */
+    /** EMERGENCY: true if an emergency vehicle is coming from this direction. */
     public boolean emergency(Direction direction) throws IOException {
         return sendBoolean("EMERGENCY " + direction);
     }
 
-    /** True if a car is waiting in this lane. */
+    /** CAR_DETECTION: true if a car is waiting at the stop line in this lane. */
     public boolean carDetection(Direction direction, Lane lane) throws IOException {
         return sendBoolean("CAR_DETECTION " + direction + " " + lane);
     }
 
-    // ---------------- extra inputs (not in the agreed API) ----------------
-    // Not public, so only our Controller uses them.
+    // ---------------- Extra inputs (not in the agreed API) ----------------
+    // Not public, because they aren't in the agreed API. Only our Controller
+    // uses them, for day/night and power failure.
 
-    /** DAY or NIGHT from the Day/Night Timer. */
+    /** DAY_NIGHT: DAY or NIGHT from the Day/Night Timer. */
     Mode dayNightMode() throws IOException {
         return Mode.valueOf(readValue(send("DAY_NIGHT")));
     }
 
-    /** How long a green light lasts, in seconds. */
+    /** GREEN_INTERVAL: how long a day green lasts, in seconds. */
     double greenInterval() throws IOException {
         return Double.parseDouble(readValue(send("GREEN_INTERVAL")));
     }
 
-    /** False if there is a power failure. */
+    /** POWER: false if there's a power failure. */
     boolean powerOn() throws IOException {
         return sendBoolean("POWER");
     }
 
-    // ---------------- sending and reading ----------------
+    // ---------------- Sending and reading ----------------
 
-    /** Sends one command and returns the one line reply. */
+    /**
+     * Sends one command and returns the one line reply.
+     * Throws an error if the reply starts with ERROR or the twin is gone.
+     */
     private String send(String command) throws IOException {
         output.println(command);
         String response = input.readLine();
@@ -102,6 +130,7 @@ public class Multiplexor implements AutoCloseable {
         return response;
     }
 
+    /** For the true/false questions. "VALUE TRUE" gives true. */
     private boolean sendBoolean(String command) throws IOException {
         String response = send(command);
         if (response.equalsIgnoreCase("VALUE TRUE")) return true;
@@ -109,7 +138,7 @@ public class Multiplexor implements AutoCloseable {
         throw new IOException("Expected VALUE TRUE/FALSE but got: " + response);
     }
 
-    /** Takes "VALUE something" and returns "something". */
+    /** Takes "VALUE something" and gives back "something", like "VALUE DAY" gives "DAY". */
     private String readValue(String response) throws IOException {
         if (!response.startsWith("VALUE ")) {
             throw new IOException("Expected VALUE but got: " + response);
@@ -117,6 +146,7 @@ public class Multiplexor implements AutoCloseable {
         return response.substring("VALUE ".length()).trim();
     }
 
+    /** Closes the socket. The try (...) in Controller.run() calls this for us. */
     @Override
     public void close() throws IOException {
         socket.close();

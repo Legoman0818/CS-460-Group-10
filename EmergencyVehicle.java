@@ -5,15 +5,23 @@ import javafx.scene.shape.Circle;
 import javafx.scene.shape.Rectangle;
 
 /**
- * The emergency vehicle animation. It drives along a list of x/y points and
- * doesn't stop for lights. When it gets to the end it calls onFinished.
+ * EmergencyVehicle - the ambulance animation. (Walkthrough 3.13)
+ *
+ * Design Diagram: not on the diagram. It's what sets off the Emergency
+ * Vehicle Detector.
+ *
+ * It drives along the same route as the normal car in the lane it needs
+ * (Crosswalk picks the lane with Roads.laneFor), and it doesn't stop for
+ * lights. When it gets to the end it calls onFinished, which is
+ * removeEmergencyVehicle in Crosswalk. That clears the detector, and the
+ * Controller goes back to normal.
  */
 public class EmergencyVehicle extends Group {
 
     private static final double SPEED = 190.0; // pixels per second
 
     private final double[][] route;    // list of {x, y} points
-    private final Runnable onFinished;
+    private final Runnable onFinished; // what to run when it leaves the screen
     private AnimationTimer animation;
     private int target = 1;            // point 0 is the start, so drive to point 1 first
     private double x;
@@ -48,7 +56,7 @@ public class EmergencyVehicle extends Group {
         faceTarget();
     }
 
-    /** Starts moving. */
+    /** Starts moving. It has its own AnimationTimer, so it moves every frame. */
     public void play() {
         animation = new AnimationTimer() {
             private long previous;
@@ -59,7 +67,7 @@ public class EmergencyVehicle extends Group {
                     previous = now;
                     return;
                 }
-                double seconds = (now - previous) / 1_000_000_000.0; // ns to seconds
+                double seconds = (now - previous) / 1_000_000_000.0; // now is in nanoseconds, so change it to seconds
                 previous = now;
                 move(SPEED * seconds);
             }
@@ -67,10 +75,12 @@ public class EmergencyVehicle extends Group {
         animation.start();
     }
 
+    /** Stops moving (when it's finished, or on Reset / Power Off). */
     public void stop() {
         if (animation != null) animation.stop();
     }
 
+    /** Moves toward the next point. When it reaches a point it turns toward the one after. */
     private void move(double distance) {
         if (target >= route.length) {
             finish();
@@ -100,7 +110,7 @@ public class EmergencyVehicle extends Group {
     private void faceTarget() {
         double dx = route[target][0] - x;
         double dy = route[target][1] - y;
-        // the picture points up, so subtract 90 degrees
+        // the picture points down, so subtract 90 degrees (same as Car)
         setRotate(Math.toDegrees(Math.atan2(dy, dx)) - 90);
     }
 

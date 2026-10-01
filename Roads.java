@@ -14,9 +14,13 @@ import javafx.scene.shape.StrokeLineCap;
 import javafx.scene.shape.StrokeLineJoin;
 
 /**
+ * Roads - the background picture and the car routes. (Walkthrough 3.14)
+ *
+ * Design Diagram: not on the diagram, it's only the background picture.
+ *
  * Draws the road (lanes, stop lines, crosswalks, arrows) and holds the route
- * each lane's cars drive along. This is only the background picture; the
- * lights and cars are drawn by other classes on top of it.
+ * each lane's car drives along. The lights and cars are drawn on top of
+ * this by their own classes.
  */
 public class Roads {
 
@@ -28,10 +32,11 @@ public class Roads {
     private static final Color PAINT = Color.web("#f0f0f0"); // white paint
 
     /**
-     * The route for each lane, as a list of {x, y} points. Point 0 is off the
-     * screen where cars start, point 1 is the stop line, and the last point is
-     * off the screen on the other side. Keys look like "NORTH_LEFT".
-     * The emergency vehicle uses these same routes.
+     * ROUTES: the route for each of the 12 lanes, as a list of {x, y} points.
+     *   point 0 = off the screen where cars start
+     *   point 1 = the stop line
+     *   last    = off the screen on the other side
+     * Keys look like "NORTH_LEFT". The cars AND the emergency vehicle use these.
      */
     public static final Map<String, double[][]> ROUTES = new LinkedHashMap<>();
 
@@ -57,7 +62,10 @@ public class Roads {
         ROUTES.put("EAST_RIGHT",     new double[][]{{W+60,285},{800,285},{560,285},{560,-80}});
     }
 
-    /** Which lane a car from approach has to be in to get to destination. */
+    /**
+     * Which lane a vehicle coming from approach has to be in to get to
+     * destination. Used to pick the emergency vehicle's route.
+     */
     public static Multiplexor.Lane laneFor(Multiplexor.Direction approach,
                                            Multiplexor.Direction destination) {
         Multiplexor.Direction left = switch (approach) {
@@ -79,7 +87,10 @@ public class Roads {
 
     private final Pane root;
 
-    /** Draws everything. Order matters, later things are drawn on top. */
+    // ---------------- Drawing ----------------
+    // Everything below just draws the picture.
+
+    /** Draws everything. The order matters, later things get drawn on top. */
     public Roads(Pane root) {
         this.root = root;
         background();

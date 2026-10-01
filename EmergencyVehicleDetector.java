@@ -7,15 +7,22 @@ import javafx.scene.text.Font;
 import javafx.scene.text.Text;
 
 /**
- * Emergency Vehicle Detector device (the antenna). It only detects the
- * direction an emergency vehicle is currently coming from.
+ * EmergencyVehicleDetector - the antenna. (Walkthrough 3.9)
+ *
+ * Design Diagram: the Emergency Vehicle Detector box and the Emergency Antenna.
+ *
+ * API: EMERGENCY dir calls detect().
+ *
+ * All it does is remember which direction an emergency vehicle is coming
+ * from. The side panel sets it when the vehicle starts and clears it when
+ * the vehicle leaves.
  */
 public class EmergencyVehicleDetector {
 
     private static final Color PAINT = Color.web("#f0f0f0");
     private static final Color RED   = Color.web("#cf1d1d");
 
-    private Multiplexor.Direction activeApproach; // null when there is no vehicle
+    private Multiplexor.Direction activeApproach; // null when there's no vehicle
 
     /** Draws the antenna on the intersection. */
     public EmergencyVehicleDetector(Pane root) {
@@ -36,17 +43,17 @@ public class EmergencyVehicleDetector {
         root.getChildren().addAll(pole, label, knob);
     }
 
-    /** Called when an emergency vehicle starts its route. */
+    /** Called when an emergency vehicle starts its route (Send Emergency Vehicle button). */
     public void setActiveApproach(Multiplexor.Direction approach) {
         activeApproach = approach;
     }
 
-    /** Called when the emergency vehicle has left. */
+    /** Called when the emergency vehicle has left the screen. */
     public void clearActiveApproach() {
         activeApproach = null;
     }
 
-    /** True if an emergency vehicle is coming from this direction. */
+    /** EMERGENCY: true only for the direction the vehicle is coming from. */
     public boolean detect(Multiplexor.Direction direction) {
         return direction == activeApproach;
     }
