@@ -1,6 +1,5 @@
 import java.util.ArrayList;
 import java.util.List;
-
 import javafx.scene.Cursor;
 import javafx.scene.Group;
 import javafx.scene.layout.Pane;
@@ -12,7 +11,7 @@ import javafx.scene.shape.Shape;
 import javafx.scene.shape.StrokeLineCap;
 
 /**
- * Pedestrian - the call button and the walk lights. (Walkthrough 3.7)
+ * Pedestrian - the call button and the walk lights.
  *
  * Design Diagram: the Pedestrian box, which covers both the Pedestrian Call
  * Button and the Pedestrian Lights.
@@ -43,7 +42,7 @@ public class Pedestrian {
         sign(root, 514, 480, true, null);
     }
 
-    // ---------------- Button ----------------
+    //  Button 
     // A press stays saved until the Controller clears it, so it never gets
     // lost, even if an emergency happens in between.
 
@@ -63,7 +62,7 @@ public class Pedestrian {
         return wasRequested;
     }
 
-    // ---------------- Lights ----------------
+    //  Lights 
 
     /** SET_PED_LIGHT: true = WALK (orange), false = STOP (white). */
     public void setWalkLight(boolean walk) {

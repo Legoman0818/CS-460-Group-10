@@ -5,7 +5,7 @@ import javafx.scene.shape.Circle;
 import javafx.scene.shape.Rectangle;
 
 /**
- * EmergencyVehicle - the ambulance animation. (Walkthrough 3.13)
+ * EmergencyVehicle - the ambulance animation.
  *
  * Design Diagram: not on the diagram. It's what sets off the Emergency
  * Vehicle Detector.

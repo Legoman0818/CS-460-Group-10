@@ -1,6 +1,5 @@
 import java.util.LinkedHashMap;
 import java.util.Map;
-
 import javafx.scene.Node;
 import javafx.scene.layout.Pane;
 import javafx.scene.paint.Color;
@@ -14,9 +13,11 @@ import javafx.scene.shape.StrokeLineCap;
 import javafx.scene.shape.StrokeLineJoin;
 
 /**
- * Roads - the background picture and the car routes. (Walkthrough 3.14)
+ * Roads - the background picture and the car routes.
  *
- * Design Diagram: not on the diagram, it's only the background picture.
+ * Not on the diagram, it's only the background picture.
+ * Decided at some point that it would be easier to move the non-functional
+ * part of the JavaFX code on its own.
  *
  * Draws the road (lanes, stop lines, crosswalks, arrows) and holds the route
  * each lane's car drives along. The lights and cars are drawn on top of
@@ -87,7 +88,7 @@ public class Roads {
 
     private final Pane root;
 
-    // ---------------- Drawing ----------------
+    //  Drawing 
     // Everything below just draws the picture.
 
     /** Draws everything. The order matters, later things get drawn on top. */

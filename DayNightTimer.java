@@ -1,8 +1,7 @@
 /**
- * DayNightTimer - says if it's day or night. (Walkthrough 3.10)
+ * DayNightTimer - says if it's day or night.
  *
- * Design Diagram: not a box on the diagram yet. It's the input that picks
- * between the Day and Night boxes.
+ * The input that picks between the Day and Night boxes.
  *
  * API: the extra commands DAY_NIGHT (get) and GREEN_INTERVAL (getIntervalSeconds).
  *

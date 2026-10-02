@@ -1,5 +1,5 @@
 /**
- * Mode - every mode the intersection can be in. (Walkthrough 3.3)
+ * Mode - every mode the intersection can be in.
  *
  * Design Diagram: the Mode Controller box, together with Controller.step().
  * Only the Controller changes the mode.

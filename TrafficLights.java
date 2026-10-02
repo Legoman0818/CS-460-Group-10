@@ -1,7 +1,6 @@
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Consumer;
-
 import javafx.animation.Animation;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
@@ -14,7 +13,7 @@ import javafx.scene.shape.Shape;
 import javafx.util.Duration;
 
 /**
- * TrafficLights - the 12 traffic lights, one per lane. (Walkthrough 3.6)
+ * TrafficLights - the 12 traffic lights, one per lane.
  *
  * Design Diagram: the Traffic Lights box.
  *
@@ -132,7 +131,7 @@ public class TrafficLights {
         allRed();
     }
 
-    /** SET_TRAFFIC_LIGHT ends up here. Finds the light and sets it. False if there's no such lane. */
+    /** SET_TRAFFIC_LIGHT ends up here. Finds the light and sets it. False if there's no lane. */
     public boolean setOutput(Multiplexor.Direction direction, Multiplexor.Lane lane,
                              Multiplexor.Display display, Multiplexor.SignalColor color) {
         Signal signal = signals.get(Multiplexor.laneKey(direction, lane));
@@ -141,7 +140,7 @@ public class TrafficLights {
         return true;
     }
 
-    /** The manual click (just for the demo): changes the light to the next color. */
+    /** Manual clicks changes the light to the next color. */
     public boolean cycle(String name) {
         Signal signal = signals.get(name);
         if (signal == null) return false;

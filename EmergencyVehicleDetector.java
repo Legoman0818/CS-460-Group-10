@@ -7,7 +7,7 @@ import javafx.scene.text.Font;
 import javafx.scene.text.Text;
 
 /**
- * EmergencyVehicleDetector - the antenna. (Walkthrough 3.9)
+ * EmergencyVehicleDetector - the antenna.
  *
  * Design Diagram: the Emergency Vehicle Detector box and the Emergency Antenna.
  *
@@ -43,7 +43,7 @@ public class EmergencyVehicleDetector {
         root.getChildren().addAll(pole, label, knob);
     }
 
-    /** Called when an emergency vehicle starts its route (Send Emergency Vehicle button). */
+    /** Called when an emergency vehicle starts its route (send Emergency Vehicle button). */
     public void setActiveApproach(Multiplexor.Direction approach) {
         activeApproach = approach;
     }

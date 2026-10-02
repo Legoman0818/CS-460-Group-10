@@ -10,14 +10,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-
 import javafx.animation.AnimationTimer;
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
-import javafx.geometry.Rectangle2D;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.geometry.Rectangle2D;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
@@ -35,7 +34,7 @@ import javafx.stage.Screen;
 import javafx.stage.Stage;
 
 /**
- * Crosswalk - the Digital Twin, our fake intersection. (Walkthrough 3.5)
+ * Crosswalk - the Digital Twin.
  *
  * Design Diagram: not drawn as a box. It holds all the device boxes at the
  * bottom of the diagram (Traffic Lights, Pedestrian, Induction Sensor,
@@ -44,17 +43,17 @@ import javafx.stage.Stage;
  * API: this is the twin's side of the API. executeCommand() answers every
  * command the Multiplexor sends.
  *
- * It does NOT make any traffic decisions, the Controller does that. It has 4 jobs:
- *   Job 1: build the intersection and the window   (start)
- *   Job 2: move the cars                           (addCars)
- *   Job 3: the side panel                          (createPanel and the panel actions)
- *   Job 4: the server that answers the Multiplexor (startServer ... executeCommand)
+ * It does NOT make any traffic decisions, the Controller does that. It does 4 things:
+ *   1: build the intersection and the window   (start)
+ *   2: move the cars                           (addCars)
+ *   3: the side panel                          (createPanel and the panel actions)
+ *   4: the server that answers the Multiplexor (startServer ... executeCommand)
  */
 public class Crosswalk extends Application {
 
     static final int PORT = 5000; // the Multiplexor connects to this
 
-    // the intersection picture, everything on the road gets drawn on this
+    // the intersection picture
     private final Pane root = new Pane();
 
     // the devices (the boxes at the bottom of the Design Diagram, plus the timer and power sensor)
@@ -69,7 +68,7 @@ public class Crosswalk extends Application {
     private final Map<String, Car> carsByLane = new HashMap<>();
     private EmergencyVehicle activeEmergencyVehicle;
 
-    // the server (Job 4)
+    // the server
     private ServerSocket serverSocket;
     private Socket client; // the Controller's connection
 
@@ -78,7 +77,7 @@ public class Crosswalk extends Application {
     private Label modeValue;
     private Button dayNight;
 
-    // ---------------- Job 1: build the intersection ----------------
+    //  1: build the intersection 
 
     /**
      * JavaFX calls this when the window opens. Draws the roads, makes each
@@ -142,7 +141,7 @@ public class Crosswalk extends Application {
         closeServer(); // closing the connection is also what makes Controller.run() stop
     }
 
-    // ---------------- Job 2: move the cars ----------------
+    //  2: move the cars 
 
     /**
      * Makes one Car for every route in Roads.ROUTES and keeps them in
@@ -189,7 +188,7 @@ public class Crosswalk extends Application {
         };
     }
 
-    // ---------------- Job 3: the side panel ----------------
+    //  3: the side panel 
 
     /** Builds the buttons on the right. What each button does is in the panel actions below. */
     private VBox createPanel() {
@@ -267,7 +266,7 @@ public class Crosswalk extends Application {
         return panel;
     }
 
-    // the next few just style the panel so createPanel() isn't so long
+    // style panel
 
     private VBox card(Node... children) {
         VBox box = new VBox(10, children);
@@ -300,7 +299,7 @@ public class Crosswalk extends Application {
         return button;
     }
 
-    // ---------------- Job 3: panel actions ----------------
+    //  3: panel actions 
     // These ONLY change the devices. They never call the Controller.
     // The Controller sees the change the next time it checks (every 100 ms).
 
@@ -394,7 +393,7 @@ public class Crosswalk extends Application {
         showStatus("Manual signal change: " + name);
     }
 
-    // ---------------- Job 4: the server ----------------
+    //  4: the server 
 
     /** Opens port 5000 and starts one background thread to run the server. */
     private void startServer() {
@@ -497,7 +496,7 @@ public class Crosswalk extends Application {
                 return "OK PED_LIGHT " + pedStatus;
             }
 
-            // ----- inputs (the Controller asking a question) -----
+            //  inputs (the Controller asking a question)
 
             // PED_REQUEST -> Pedestrian button
             if (parts.length == 1 && parts[0].equals("PED_REQUEST")) {

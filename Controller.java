@@ -2,7 +2,7 @@ import java.io.IOException;
 import java.util.Arrays;
 
 /**
- * Controller - makes every decision for the intersection. (Walkthrough 3.2)
+ * Controller - makes every decision for the intersection.
  *
  * Design Diagram: this is the Controller box. The Mode Controller box and the
  * Day, Night, Emergency and Ped_Crossing boxes are methods in here, not their
@@ -14,7 +14,7 @@ import java.util.Arrays;
  */
 public class Controller {
 
-    // ---------------- Settings ----------------
+    //  Settings 
 
     private static final long TICK_MS = 100;                 // how often step() runs
     private static final double ALL_RED_START_SECONDS = 2;  // all red at startup
@@ -47,7 +47,7 @@ public class Controller {
         this.port = port;
     }
 
-    // ---------------- run(): the main loop ----------------
+    //  run(): the main loop 
 
     /**
      * Connects, goes all red, then loops forever: step(), wait 100 ms, repeat.
@@ -63,14 +63,13 @@ public class Controller {
                 Thread.sleep(TICK_MS);
             }
         } catch (IOException e) {
-            // this is what happens when the twin window gets closed
             System.out.println("Controller stopped: " + e.getMessage());
         } catch (InterruptedException e) {
             System.out.println("Controller stopped: interrupted");
         }
     }
 
-    // ---------------- step(): the Mode Controller ----------------
+    //  step(): the Mode Controller 
 
     /**
      * One pass of the loop. This is the Mode Controller box on the diagram.
@@ -138,7 +137,7 @@ public class Controller {
         }
     }
 
-    // ---------------- Entering a mode ----------------
+    //  Entering a mode 
 
     /** Startup (and after the power comes back): all red for 2 seconds, start from pattern 0. */
     private void enterAllRedStart() throws IOException {
@@ -172,7 +171,7 @@ public class Controller {
                 Multiplexor.SignalColor.GREEN);
     }
 
-    // ---------------- The day/night cycle ----------------
+    //  The day/night cycle 
 
     /**
      * Moves the cycle along: green -> yellow -> next pattern's green.
@@ -213,7 +212,7 @@ public class Controller {
     }
 
     /**
-     * Night only (uses the Induction Sensor). After the green has been on for
+     * Currently set up for Night only to use the Induction Sensor. After the green has been on for
      * at least 5 seconds, asks CAR_DETECTION for every lane in the next
      * pattern. If any car is waiting there, we end the green early.
      */
@@ -230,7 +229,7 @@ public class Controller {
         return false;
     }
 
-    // ---------------- Helpers ----------------
+    //  Helpers 
 
     /** Asks EMERGENCY for each direction. Returns where the vehicle is coming from, or null. */
     private Multiplexor.Direction detectEmergency() throws IOException {

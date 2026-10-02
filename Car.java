@@ -3,10 +3,7 @@ import javafx.scene.paint.Color;
 import javafx.scene.shape.Rectangle;
 
 /**
- * Car - one car in the simulation. (Walkthrough 3.12)
- *
- * Design Diagram: not on the diagram. It's part of the simulation, not the
- * traffic system.
+ * Car - one car in the simulation.
  *
  * There's one car per lane. It drives along its route, which is a list of
  * {x, y} points from Roads.ROUTES:
@@ -71,7 +68,7 @@ public class Car extends Group {
         moveTowardTarget(SPEED * seconds);
 
         if (atTarget()) {
-            // snap exactly onto the point so small errors don't add up
+            // snap exactly onto the point
             x = route[targetWaypoint][0];
             y = route[targetWaypoint][1];
             updatePosition();

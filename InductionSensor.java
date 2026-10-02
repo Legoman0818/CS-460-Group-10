@@ -1,9 +1,9 @@
 import java.util.Map;
 
 /**
- * InductionSensor - the car sensors in the road. (Walkthrough 3.8)
+ * InductionSensor - the car sensors in the road.
  *
- * Design Diagram: the Induction Sensor box (Night mode uses it).
+ * Design Diagram: the Induction Sensor box
  *
  * API: CAR_DETECTION dir lane calls detect().
  *

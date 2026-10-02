@@ -5,10 +5,8 @@ import java.io.PrintWriter;
 import java.net.Socket;
 
 /**
- * Multiplexor - how the Controller talks to the intersection. (Walkthrough 3.4)
- *
- * Design Diagram: not drawn as a box. It's the arrows going down from the
- * Controller to the devices.
+ * Multiplexor - how the Controller talks to the intersection.
+ * Design Diagram: not on it as per instructions from the professor
  *
  * API: this class IS the Controller's side of the API. Every method below
  * turns into one line of text that gets sent over a socket to the twin
@@ -17,7 +15,7 @@ import java.net.Socket;
  */
 public class Multiplexor implements AutoCloseable {
 
-    // ---------------- Enums ----------------
+    //  Enums 
     // The allowed values. Using enums means we can't send a misspelled
     // direction or color by accident.
     public enum Direction { NORTH, SOUTH, EAST, WEST }
@@ -40,7 +38,7 @@ public class Multiplexor implements AutoCloseable {
     private final BufferedReader input;   // replies coming back from the twin
     private final PrintWriter output;     // commands going to the twin
 
-    // ---------------- Connecting ----------------
+    //  Connecting 
 
     public Multiplexor(String host, int port) throws IOException, InterruptedException {
         socket = connect(host, port);
@@ -49,8 +47,7 @@ public class Multiplexor implements AutoCloseable {
     }
 
     /**
-     * The twin's window might still be opening when we get here, so if it
-     * isn't ready we wait a tenth of a second and try again, for up to 30 seconds.
+     * The socket connection test
      */
     private static Socket connect(String host, int port) throws IOException, InterruptedException {
         for (int tries = 1; tries < 300; tries++) {
@@ -63,7 +60,7 @@ public class Multiplexor implements AutoCloseable {
         return new Socket(host, port); // last try, if this fails the error goes to the caller
     }
 
-    // ---------------- API methods (agreed on with the other groups) ----------------
+    //  API methods (agreed on with the other groups) 
     // These are public so another group's Controller can use them the same way.
 
     /** PED_REQUEST: true if the button was pressed and not cleared yet. */
@@ -97,9 +94,10 @@ public class Multiplexor implements AutoCloseable {
         return sendBoolean("CAR_DETECTION " + direction + " " + lane);
     }
 
-    // ---------------- Extra inputs (not in the agreed API) ----------------
+    //  Extra inputs (not in the agreed API) 
     // Not public, because they aren't in the agreed API. Only our Controller
     // uses them, for day/night and power failure.
+    // Once again, the professor told us to leave it out of our documentation.
 
     /** DAY_NIGHT: DAY or NIGHT from the Day/Night Timer. */
     Mode dayNightMode() throws IOException {
@@ -116,7 +114,7 @@ public class Multiplexor implements AutoCloseable {
         return sendBoolean("POWER");
     }
 
-    // ---------------- Sending and reading ----------------
+    //  Sending and reading 
 
     /**
      * Sends one command and returns the one line reply.
@@ -146,7 +144,7 @@ public class Multiplexor implements AutoCloseable {
         return response.substring("VALUE ".length()).trim();
     }
 
-    /** Closes the socket. The try (...) in Controller.run() calls this for us. */
+    /** Closes the socket. The try x in Controller.run() calls this. */
     @Override
     public void close() throws IOException {
         socket.close();
